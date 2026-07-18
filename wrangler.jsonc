@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "sistema",
+  "name": "sistema85",
   "compatibility_date": "2026-07-18",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
