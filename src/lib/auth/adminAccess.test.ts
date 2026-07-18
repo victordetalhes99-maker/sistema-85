@@ -14,7 +14,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   },
 }));
 
-import { resolveAdminAccess, resolveCurrentAdminAccess } from "./adminAccess";
+import { checkAdminAccess } from "./adminAccess";
 
 const session = {
   access_token: "token",
@@ -43,9 +43,11 @@ describe("adminAccess", () => {
       error: null,
     });
 
-    await expect(resolveCurrentAdminAccess()).resolves.toMatchObject({
-      state: "unauthenticated",
-      userId: null,
+    await expect(checkAdminAccess()).resolves.toMatchObject({
+      authenticated: false,
+      authorized: false,
+      user: null,
+      error: null,
     });
     expect(mockRpc).not.toHaveBeenCalled();
   });
@@ -54,10 +56,11 @@ describe("adminAccess", () => {
     mockRpc.mockResolvedValue({ data: true, error: null });
 
     await expect(
-      resolveAdminAccess(session as Parameters<typeof resolveAdminAccess>[0]),
+      checkAdminAccess(session as Parameters<typeof checkAdminAccess>[0]),
     ).resolves.toMatchObject({
-      state: "authorized",
-      userId: "422da300-867e-48c3-9e4c-4784ae1f8645",
+      authenticated: true,
+      authorized: true,
+      error: null,
     });
 
     expect(mockRpc).toHaveBeenCalledWith("has_role", {
@@ -70,9 +73,23 @@ describe("adminAccess", () => {
     mockRpc.mockResolvedValue({ data: false, error: null });
 
     await expect(
-      resolveAdminAccess(session as Parameters<typeof resolveAdminAccess>[0]),
+      checkAdminAccess(session as Parameters<typeof checkAdminAccess>[0]),
     ).resolves.toMatchObject({
-      state: "forbidden",
+      authenticated: true,
+      authorized: false,
+      error: null,
+    });
+  });
+
+  it("nao libera acesso quando o rpc retorna null", async () => {
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    await expect(
+      checkAdminAccess(session as Parameters<typeof checkAdminAccess>[0]),
+    ).resolves.toMatchObject({
+      authenticated: true,
+      authorized: false,
+      error: null,
     });
   });
 
@@ -83,9 +100,11 @@ describe("adminAccess", () => {
     });
 
     await expect(
-      resolveAdminAccess(session as Parameters<typeof resolveAdminAccess>[0]),
+      checkAdminAccess(session as Parameters<typeof checkAdminAccess>[0]),
     ).resolves.toMatchObject({
-      state: "error",
+      authenticated: true,
+      authorized: false,
+      error: "Nao foi possivel validar o acesso administrativo. Tente novamente.",
     });
   });
 
@@ -95,8 +114,10 @@ describe("adminAccess", () => {
       error: { message: "session expired" },
     });
 
-    await expect(resolveCurrentAdminAccess()).resolves.toMatchObject({
-      state: "unauthenticated",
+    await expect(checkAdminAccess()).resolves.toMatchObject({
+      authenticated: false,
+      authorized: false,
+      error: "Nao foi possivel conectar ao servico de autenticacao.",
     });
     expect(mockRpc).not.toHaveBeenCalled();
   });

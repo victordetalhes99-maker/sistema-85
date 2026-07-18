@@ -4,7 +4,7 @@ import { Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth/AuthProvider";
-import { resolveCurrentAdminAccess } from "@/lib/auth/adminAccess";
+import { checkAdminAccess } from "@/lib/auth/adminAccess";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,14 @@ function safeNext(raw: string | null): string {
   if (!raw) return "/admin";
   try {
     const decoded = decodeURIComponent(raw);
-    if (decoded.startsWith("/admin")) return decoded;
+    if (
+      decoded.startsWith("/admin") &&
+      !decoded.startsWith("//") &&
+      !decoded.includes("://") &&
+      !decoded.toLowerCase().startsWith("javascript:")
+    ) {
+      return decoded;
+    }
   } catch {
     /* ignore */
   }
@@ -21,7 +28,7 @@ function safeNext(raw: string | null): string {
 }
 
 export default function AdminLoginPage() {
-  const { status, isAdmin, adminLoading } = useAuth();
+  const { authLoading, status, isAdmin, adminLoading } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const search = new URLSearchParams(location.search);
@@ -37,7 +44,7 @@ export default function AdminLoginPage() {
     document.title = "Entrar - 85 TATTOO Admin";
   }, []);
 
-  if (status === "authenticated" && !adminLoading && isAdmin) {
+  if (!authLoading && status === "authenticated" && !adminLoading && isAdmin === true) {
     return <Navigate to={next} replace />;
   }
 
@@ -80,25 +87,25 @@ export default function AdminLoginPage() {
       });
 
       if (signInErr) {
-        setError("E-mail ou senha invalidos.");
+        setError("Nao foi possivel entrar. Verifique as credenciais e tente novamente.");
         setPassword("");
         return;
       }
 
-      const adminAccess = await resolveCurrentAdminAccess();
+      const adminAccess = await checkAdminAccess();
 
-      if (adminAccess.state === "unauthenticated") {
-        setError("Nao foi possivel iniciar a sessao.");
+      if (!adminAccess.authenticated) {
+        setError(adminAccess.error ?? "Nao foi possivel iniciar a sessao.");
         return;
       }
 
-      if (adminAccess.state === "error") {
+      if (adminAccess.error) {
         await supabase.auth.signOut();
-        setError("Nao foi possivel validar o acesso administrativo.");
+        setError(adminAccess.error);
         return;
       }
 
-      if (adminAccess.state !== "authorized") {
+      if (!adminAccess.authorized) {
         await supabase.auth.signOut();
         setError("Esta conta nao possui acesso administrativo.");
         return;
@@ -107,7 +114,7 @@ export default function AdminLoginPage() {
       toast.success("Bem-vindo(a) ao painel.");
       navigate(next, { replace: true });
     } catch {
-      setError("Falha inesperada. Tente novamente.");
+      setError("Nao foi possivel conectar ao servico de autenticacao.");
     } finally {
       setSubmitting(false);
     }

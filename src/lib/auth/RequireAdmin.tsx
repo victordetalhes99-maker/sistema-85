@@ -13,10 +13,10 @@ function FullScreen({ children }: { children: React.ReactNode }) {
 }
 
 export default function RequireAdmin() {
-  const { status, isAdmin, adminLoading } = useAuth();
+  const { authLoading, status, isAdmin, adminLoading } = useAuth();
   const location = useLocation();
 
-  if (status === "loading") {
+  if (authLoading || status === "loading") {
     return (
       <FullScreen>
         <Loader2 className="mx-auto h-6 w-6 animate-spin text-[color:var(--gold)]" />
@@ -39,7 +39,7 @@ export default function RequireAdmin() {
     );
   }
 
-  if (!isAdmin) {
+  if (isAdmin !== true) {
     return <Navigate to="/acesso-negado" replace state={{ from: location.pathname }} />;
   }
 

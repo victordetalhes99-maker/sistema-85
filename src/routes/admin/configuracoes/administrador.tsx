@@ -3,12 +3,12 @@ import { SettingsSection } from "@/components/admin/settings/SettingsSection";
 import { useAuth } from "@/lib/auth/AuthProvider";
 
 function useMe() {
-  const { email, userId, isAdmin, adminLoading, status } = useAuth();
+  const { email, userId, isAdmin, authLoading, adminLoading } = useAuth();
   return {
     email,
     userId,
     isAdmin,
-    loading: status === "loading" || adminLoading,
+    loading: authLoading || adminLoading,
   };
 }
 
@@ -37,7 +37,7 @@ export default function ConfigAdministradorPage() {
               value={me.isAdmin ? "Administrador" : "Sem privilégios administrativos"}
               tone={me.isAdmin ? "success" : "warning"}
             />
-            <Info2 label="Fonte" value="tabela public.admins (RLS admin-only)" />
+            <Info2 label="Fonte" value="Supabase Auth + public.has_role(user_id, 'admin')" />
           </div>
         )}
       </SettingsSection>
