@@ -77,6 +77,21 @@ export type Database = {
         }
         Relationships: []
       }
+      user_roles: {
+        Row: {
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
       admins: {
         Row: {
           criado_em: string
@@ -888,6 +903,13 @@ export type Database = {
       }
       checkin_start: { Args: { _id: string }; Returns: undefined }
       delete_cliente_lgpd: { Args: { _cpf: string }; Returns: undefined }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
       is_admin: { Args: never; Returns: boolean }
       latest_backup_status: {
         Args: never
@@ -970,6 +992,7 @@ export type Database = {
       }
     }
     Enums: {
+      app_role: "admin" | "gerente" | "recepcao"
       check_in_event_kind:
         | "created"
         | "called"
@@ -1114,6 +1137,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      app_role: ["admin", "gerente", "recepcao"],
       check_in_event_kind: [
         "created",
         "called",

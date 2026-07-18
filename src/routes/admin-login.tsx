@@ -4,6 +4,7 @@ import { Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth/AuthProvider";
+import { resolveCurrentAdminAccess } from "@/lib/auth/adminAccess";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,31 +34,34 @@ export default function AdminLoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    document.title = "Entrar — 85 TATTOO Admin";
+    document.title = "Entrar - 85 TATTOO Admin";
   }, []);
 
-  // Se já autenticado como admin, redireciona.
-  if (status === "authenticated" && !adminLoading) {
-    if (isAdmin) return <Navigate to={next} replace />;
+  if (status === "authenticated" && !adminLoading && isAdmin) {
+    return <Navigate to={next} replace />;
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (submitting) return;
+
     setError(null);
     const cleanEmail = email.trim().toLowerCase();
+
     if (!cleanEmail || !password) {
       setError("Informe e-mail e senha.");
       return;
     }
+
     setSubmitting(true);
+
     try {
-      // Verifica bloqueio antes de tentar
       const { data: lock } = await supabase.rpc("check_login_lockout", {
         _email: cleanEmail,
         _ip: "",
       });
       const locked = (lock as { locked?: boolean } | null)?.locked;
+
       if (locked) {
         setError("Muitas tentativas. Aguarde alguns minutos e tente novamente.");
         return;
@@ -68,7 +72,6 @@ export default function AdminLoginPage() {
         password,
       });
 
-      // registra tentativa (backend faz limpeza automática de logs)
       await supabase.rpc("record_login_attempt", {
         _email: cleanEmail,
         _ip: "",
@@ -77,29 +80,30 @@ export default function AdminLoginPage() {
       });
 
       if (signInErr) {
-        setError("E-mail ou senha inválidos.");
+        setError("E-mail ou senha invalidos.");
         setPassword("");
         return;
       }
 
-      // Aguarda um tick para o onAuthStateChange popular a sessão
-      const { data: userRes } = await supabase.auth.getUser();
-      const uid = userRes.user?.id;
-      if (!uid) {
-        setError("Não foi possível iniciar a sessão.");
+      const adminAccess = await resolveCurrentAdminAccess();
+
+      if (adminAccess.state === "unauthenticated") {
+        setError("Nao foi possivel iniciar a sessao.");
         return;
       }
-      // Valida se é admin (defesa em profundidade — a RLS já protege os dados)
-      const { data: adminRow } = await supabase
-        .from("admins")
-        .select("user_id")
-        .eq("user_id", uid)
-        .maybeSingle();
-      if (!adminRow) {
+
+      if (adminAccess.state === "error") {
         await supabase.auth.signOut();
-        setError("Esta conta não possui acesso administrativo.");
+        setError("Nao foi possivel validar o acesso administrativo.");
         return;
       }
+
+      if (adminAccess.state !== "authorized") {
+        await supabase.auth.signOut();
+        setError("Esta conta nao possui acesso administrativo.");
+        return;
+      }
+
       toast.success("Bem-vindo(a) ao painel.");
       navigate(next, { replace: true });
     } catch {
@@ -117,10 +121,10 @@ export default function AdminLoginPage() {
             <ShieldCheck className="h-5 w-5 text-[color:var(--gold)]" />
           </div>
           <h1 className="mt-4 font-serif text-2xl font-semibold tracking-tight text-foreground">
-            85 TATTOO — Painel Administrativo
+            85 TATTOO - Painel Administrativo
           </h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            Área restrita. Acesso somente para administradores autorizados.
+            Area restrita. Acesso somente para administradores autorizados.
           </p>
         </div>
 
@@ -189,7 +193,7 @@ export default function AdminLoginPage() {
           <Button type="submit" disabled={submitting} className="w-full">
             {submitting ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Entrando…
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Entrando...
               </>
             ) : (
               "Entrar"
@@ -197,13 +201,13 @@ export default function AdminLoginPage() {
           </Button>
 
           <p className="text-center text-[11px] text-muted-foreground">
-            Ao continuar, você concorda com o uso responsável do painel administrativo.
+            Ao continuar, voce concorda com o uso responsavel do painel administrativo.
           </p>
         </form>
 
         <div className="mt-4 text-center text-xs text-muted-foreground">
           <Link to="/" className="hover:text-foreground">
-            ← Voltar para a recepção
+            {"<-"} Voltar para a recepcao
           </Link>
         </div>
       </div>

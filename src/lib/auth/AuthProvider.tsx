@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { resolveAdminAccess } from "./adminAccess";
 
 export type AuthStatus = "loading" | "unauthenticated" | "authenticated";
 
@@ -18,9 +19,7 @@ interface AuthState {
   user: User | null;
   email: string | null;
   userId: string | null;
-  /** true = admin real confirmado na tabela public.admins (RLS-protegida). */
   isAdmin: boolean;
-  /** true enquanto a checagem de admin ainda está pendente após haver sessão. */
   adminLoading: boolean;
   signOut: () => Promise<void>;
   refreshRole: () => Promise<void>;
@@ -35,53 +34,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [adminLoading, setAdminLoading] = useState(false);
   const lastCheckedUserId = useRef<string | null>(null);
 
-  // Escuta primeiro (importante), depois busca sessão persistida.
+  function applySession(nextSession: Session | null) {
+    setSession(nextSession);
+    setSessionLoaded(true);
+    setAdminLoading(Boolean(nextSession?.user?.id));
+  }
+
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      setSessionLoaded(true);
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      applySession(nextSession);
     });
+
     supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setSessionLoaded(true);
+      applySession(data.session);
     });
+
     return () => {
       sub.subscription.unsubscribe();
     };
   }, []);
 
-  // Recalcula isAdmin quando o usuário muda.
   useEffect(() => {
     const uid = session?.user?.id ?? null;
+
     if (!uid) {
       setIsAdmin(false);
       setAdminLoading(false);
       lastCheckedUserId.current = null;
       return;
     }
+
     if (lastCheckedUserId.current === uid) return;
+
     lastCheckedUserId.current = uid;
     let alive = true;
     setAdminLoading(true);
+
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("admins")
-          .select("user_id")
-          .eq("user_id", uid)
-          .maybeSingle();
+        const result = await resolveAdminAccess(session);
         if (!alive) return;
-        setIsAdmin(!error && Boolean(data));
+        setIsAdmin(result.state === "authorized");
       } catch {
         if (alive) setIsAdmin(false);
       } finally {
         if (alive) setAdminLoading(false);
       }
     })();
+
     return () => {
       alive = false;
     };
-  }, [session?.user?.id]);
+  }, [session]);
 
   const value = useMemo<AuthState>(() => {
     const status: AuthStatus = !sessionLoaded
@@ -89,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : session
         ? "authenticated"
         : "unauthenticated";
+
     return {
       status,
       session,
@@ -101,15 +106,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await supabase.auth.signOut();
       },
       refreshRole: async () => {
-        const uid = session?.user?.id;
-        if (!uid) return;
+        if (!session) return;
         setAdminLoading(true);
-        const { data } = await supabase
-          .from("admins")
-          .select("user_id")
-          .eq("user_id", uid)
-          .maybeSingle();
-        setIsAdmin(Boolean(data));
+        const result = await resolveAdminAccess(session);
+        setIsAdmin(result.state === "authorized");
         setAdminLoading(false);
       },
     };
