@@ -4,7 +4,6 @@ import { Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth/AuthProvider";
-import { checkAdminAccess } from "@/lib/auth/adminAccess";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -63,10 +62,15 @@ export default function AdminLoginPage() {
     setSubmitting(true);
 
     try {
-      const { data: lock } = await supabase.rpc("check_login_lockout", {
+      const { data: lock, error: lockError } = await supabase.rpc("check_login_lockout", {
         _email: cleanEmail,
         _ip: "",
       });
+
+      if (lockError) {
+        console.warn("Login lockout check failed:", lockError);
+      }
+
       const locked = (lock as { locked?: boolean } | null)?.locked;
 
       if (locked) {
@@ -74,45 +78,54 @@ export default function AdminLoginPage() {
         return;
       }
 
-      const { error: signInErr } = await supabase.auth.signInWithPassword({
+      const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password,
       });
 
-      await supabase.rpc("record_login_attempt", {
+      const { error: recordError } = await supabase.rpc("record_login_attempt", {
         _email: cleanEmail,
         _ip: "",
         _success: !signInErr,
         _user_agent: navigator.userAgent.slice(0, 512),
       });
 
-      if (signInErr) {
-        setError("Nao foi possivel entrar. Verifique as credenciais e tente novamente.");
+      if (recordError) {
+        console.warn("Login attempt audit failed:", recordError);
+      }
+
+      if (signInErr || !signInData?.user?.id || !signInData.session) {
+        setError("E-mail ou senha incorretos.");
         setPassword("");
         return;
       }
 
-      const adminAccess = await checkAdminAccess();
+      const { data: hasAdminRole, error: roleError } = await supabase.rpc("has_role", {
+        _user_id: signInData.user.id,
+        _role: "admin",
+      });
 
-      if (!adminAccess.authenticated) {
-        setError(adminAccess.error ?? "Nao foi possivel iniciar a sessao.");
-        return;
-      }
-
-      if (adminAccess.error) {
+      if (roleError) {
+        console.error("Admin role validation failed:", roleError);
         await supabase.auth.signOut();
-        setError(adminAccess.error);
+        setError("Nao foi possivel validar o acesso administrativo.");
         return;
       }
 
-      if (!adminAccess.authorized) {
+      if (hasAdminRole !== true) {
         await supabase.auth.signOut();
-        setError("Esta conta nao possui acesso administrativo.");
+        setError("Este usuario nao possui acesso administrativo.");
         return;
       }
 
-      toast.success("Bem-vindo(a) ao painel.");
-      navigate(next, { replace: true });
+      try {
+        toast.success("Bem-vindo(a) ao painel.");
+        navigate(next, { replace: true });
+      } catch {
+        await supabase.auth.signOut();
+        setError("Nao foi possivel concluir a navegacao do painel.");
+        return;
+      }
     } catch {
       setError("Nao foi possivel conectar ao servico de autenticacao.");
     } finally {

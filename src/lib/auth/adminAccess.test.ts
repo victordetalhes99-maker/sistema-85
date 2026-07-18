@@ -23,7 +23,7 @@ const session = {
   expires_at: 9999999999,
   token_type: "bearer",
   user: {
-    id: "422da300-867e-48c3-9e4c-4784ae1f8645",
+    id: "d65e5b1d-5224-478b-aeba-5dbdef96466d",
     app_metadata: {},
     user_metadata: {},
     aud: "authenticated",
@@ -64,7 +64,7 @@ describe("adminAccess", () => {
     });
 
     expect(mockRpc).toHaveBeenCalledWith("has_role", {
-      _user_id: "422da300-867e-48c3-9e4c-4784ae1f8645",
+      _user_id: "d65e5b1d-5224-478b-aeba-5dbdef96466d",
       _role: "admin",
     });
   });
