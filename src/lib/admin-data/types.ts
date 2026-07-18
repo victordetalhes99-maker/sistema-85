@@ -103,6 +103,7 @@ export interface IntegrationInfo {
   label: string;
   descricao: string;
   status: IntegrationStatus;
+  statusDetail?: string;
 }
 
 export interface SystemSettings {

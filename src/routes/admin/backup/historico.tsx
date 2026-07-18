@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { History, Play } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { useState } from "react";
 import { EmptyState } from "@/components/admin/feedback/EmptyState";
 import { StatusBadge } from "@/components/admin/backup/StatusBadge";
+import { Button } from "@/components/ui/button";
 import { useBackupDestinations, useBackupJobs } from "@/lib/backup/hooks";
 import {
   DESTINATION_LABELS,
@@ -11,45 +13,61 @@ import {
   formatDuration,
   STATUS_LABELS,
 } from "@/lib/backup/format";
+import { executeManualBackup } from "@/lib/backup/manual";
 
 export default function BackupHistoricoPage() {
-  const { data: jobs, isLoading, error } = useBackupJobs();
-  const { data: destinations } = useBackupDestinations();
-  const podeExecutar = destinations.some((d) => d.status === "conectado");
+  const jobsState = useBackupJobs();
+  const destinationsState = useBackupDestinations();
+  const [running, setRunning] = useState(false);
+
+  async function handleRunBackup() {
+    try {
+      setRunning(true);
+      const result = await executeManualBackup();
+      jobsState.refetch();
+      destinationsState.refetch();
+      toast.success(
+        result.url
+          ? `Backup concluido. Planilha atualizada com ${result.totalClientes ?? 0} cliente(s).`
+          : "Backup concluido com sucesso.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha ao executar o backup manual.");
+    } finally {
+      setRunning(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
-          Toda execução registrada é auditável, com hash e responsável. Nenhuma linha fictícia.
+          Toda execucao registrada e auditavel, com hash e responsavel. Nenhuma linha ficticia.
         </p>
         <Button
           className="btn-gold"
-          disabled
-          title={
-            podeExecutar
-              ? "Aguardando worker/edge function de execução de backup"
-              : "Configure um destino conectado antes de habilitar a execução"
-          }
+          disabled={running}
+          onClick={handleRunBackup}
+          title="Dispara a edge function autenticada de backup manual."
         >
           <Play className="mr-1.5 h-4 w-4" />
-          Executar backup manual
+          {running ? "Executando..." : "Executar backup manual"}
         </Button>
       </div>
 
-      {error && (
+      {jobsState.error && (
         <EmptyState
           icon={History}
-          title="Histórico indisponível"
-          description="Autentique-se como administrador para visualizar as execuções."
+          title="Historico indisponivel"
+          description="Autentique-se como administrador para visualizar as execucoes."
         />
       )}
 
-      {!error && !isLoading && jobs.length === 0 && (
+      {!jobsState.error && !jobsState.isLoading && jobsState.data.length === 0 && (
         <EmptyState
           icon={History}
           title="Nenhum backup foi executado"
-          description="Configure um destino e execute a primeira cópia de segurança para começar o histórico."
+          description="Dispare o primeiro backup manual ou configure os destinos externos para iniciar o historico."
           action={
             <Button asChild variant="outline">
               <Link to="/admin/backup/destinos">Configurar destino</Link>
@@ -58,7 +76,7 @@ export default function BackupHistoricoPage() {
         />
       )}
 
-      {jobs.length > 0 && (
+      {jobsState.data.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-border/50 bg-card/30 backdrop-blur-sm">
           <table className="w-full min-w-[900px] text-left text-sm">
             <thead className="border-b border-border/40 bg-background/40 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -67,14 +85,14 @@ export default function BackupHistoricoPage() {
                 <th className="px-4 py-2.5">Tipo</th>
                 <th className="px-4 py-2.5">Destino</th>
                 <th className="px-4 py-2.5">Tamanho</th>
-                <th className="px-4 py-2.5">Duração</th>
+                <th className="px-4 py-2.5">Duracao</th>
                 <th className="px-4 py-2.5">Integridade</th>
                 <th className="px-4 py-2.5">Status</th>
-                <th className="px-4 py-2.5 text-right">Ações</th>
+                <th className="px-4 py-2.5 text-right">Acoes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
-              {jobs.map((j) => (
+              {jobsState.data.map((j) => (
                 <tr key={j.id} className="hover:bg-background/30">
                   <td className="px-4 py-3 text-muted-foreground">
                     {formatDateTime(j.started_at)}
@@ -88,7 +106,7 @@ export default function BackupHistoricoPage() {
                     {formatDuration(j.duration_ms)}
                   </td>
                   <td className="px-4 py-3 font-mono text-[11px] text-muted-foreground">
-                    {j.checksum_sha256 ? `${j.checksum_sha256.slice(0, 10)}…` : "—"}
+                    {j.checksum_sha256 ? `${j.checksum_sha256.slice(0, 10)}...` : "—"}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={j.status} />

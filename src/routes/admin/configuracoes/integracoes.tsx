@@ -1,24 +1,39 @@
 import { AlertCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/admin/feedback/EmptyState";
 import { SettingsSection } from "@/components/admin/settings/SettingsSection";
+import { Button } from "@/components/ui/button";
 import { useIntegracoes } from "@/lib/admin-data/hooks";
 
 const STATUS_LABEL: Record<string, string> = {
-  nao_configurado: "Não configurado",
-  pendente: "Configuração incompleta",
+  nao_configurado: "Nao configurado",
+  pendente: "Configuracao incompleta",
   conectado: "Conectado",
   erro: "Erro",
   desativado: "Desativado",
 };
 
 export default function ConfigIntegracoesPage() {
-  const { data } = useIntegracoes();
+  const { data, isLoading, error } = useIntegracoes();
 
   return (
     <SettingsSection
-      title="Integrações"
-      description="Cards refletem o estado real do backend. Configuração e teste exigem credenciais aprovadas — nenhum segredo é digitado ou armazenado no navegador."
+      title="Integracoes"
+      description="Cards refletem o estado real do backend. Configuracao e teste exigem credenciais aprovadas - nenhum segredo e digitado ou armazenado no navegador."
     >
+      {error && (
+        <EmptyState
+          icon={AlertCircle}
+          title="Nao foi possivel carregar as integracoes"
+          description="O painel nao conseguiu validar o estado atual do backend neste navegador."
+        />
+      )}
+
+      {!error && isLoading && (
+        <div className="rounded-lg border border-border/50 bg-background/30 p-4 text-sm text-muted-foreground">
+          Validando banco, storage e destinos reais do backend...
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {data.map((i) => (
           <div
@@ -39,7 +54,7 @@ export default function ConfigIntegracoesPage() {
                 size="sm"
                 variant="outline"
                 disabled
-                title="Fluxo seguro de configuração ainda não disponível"
+                title="Fluxo seguro de configuracao ainda nao disponivel"
               >
                 Configurar
               </Button>
@@ -47,13 +62,13 @@ export default function ConfigIntegracoesPage() {
                 size="sm"
                 variant="ghost"
                 disabled
-                title="Aguardando fluxo de teste no backend"
+                title="Aguardando fluxo de teste autenticado no backend"
               >
-                Testar conexão
+                Testar conexao
               </Button>
             </div>
-            <p className="text-[10px] uppercase tracking-wider text-amber-300/70">
-              Aguardando backend seguro para credenciais
+            <p className="text-[11px] text-muted-foreground">
+              {i.statusDetail ?? "Sem detalhe adicional."}
             </p>
           </div>
         ))}

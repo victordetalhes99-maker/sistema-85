@@ -9,14 +9,15 @@ import {
   HardDrive,
   History,
   Lock,
-  RotateCcw,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { useState } from "react";
 import { EmptyState } from "@/components/admin/feedback/EmptyState";
-import { StatusBadge } from "@/components/admin/backup/StatusBadge";
 import { ProtectionChecklist } from "@/components/admin/backup/ProtectionChecklist";
+import { StatusBadge } from "@/components/admin/backup/StatusBadge";
+import { Button } from "@/components/ui/button";
 import {
   useBackupAlerts,
   useBackupDestinations,
@@ -24,6 +25,7 @@ import {
   useBackupOverview,
   useBackupSettings,
 } from "@/lib/backup/hooks";
+import { executeManualBackup } from "@/lib/backup/manual";
 import {
   DESTINATION_LABELS,
   formatBytes,
@@ -64,6 +66,7 @@ export default function BackupOverviewPage() {
   const destinations = useBackupDestinations();
   const jobs = useBackupJobs();
   const settings = useBackupSettings();
+  const [running, setRunning] = useState(false);
 
   const alerts = useBackupAlerts(overview.data, destinations.data, jobs.data, settings.data);
 
@@ -73,11 +76,31 @@ export default function BackupOverviewPage() {
     (d) => d.status === "conectado" && d.id !== primeiroDestino?.id,
   );
 
+  async function handleRunBackup() {
+    try {
+      setRunning(true);
+      const result = await executeManualBackup();
+      overview.refetch();
+      destinations.refetch();
+      jobs.refetch();
+      settings.refetch();
+      toast.success(
+        result.url
+          ? `Backup concluido. Planilha atualizada com ${result.totalClientes ?? 0} cliente(s).`
+          : "Backup concluido com sucesso.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha ao executar o backup manual.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
   const checklist = [
     {
       label: "Banco principal",
       done: true,
-      detail: "Lovable Cloud ativo. Consultas administrativas autenticadas via RLS.",
+      detail: "Supabase ativo. Consultas administrativas autenticadas via RLS.",
     },
     {
       label: "Destino de armazenamento externo",
@@ -92,72 +115,65 @@ export default function BackupOverviewPage() {
       label: "Criptografia autenticada",
       done: !!settings.data?.encryption_enabled,
       detail: settings.data?.encryption_enabled
-        ? `Ativa (${settings.data.encryption_version ?? "versão registrada"}).`
-        : "Chave AES-GCM ainda não configurada — necessária para exportar dados sensíveis.",
+        ? `Ativa (${settings.data.encryption_version ?? "versao registrada"}).`
+        : "Chave AES-GCM ainda nao configurada - necessaria para exportar dados sensiveis.",
       to: "/admin/backup/politica",
     },
     {
-      label: "Agendamento automático",
+      label: "Agendamento automatico",
       done: !!settings.data?.auto_enabled,
       detail: settings.data?.auto_enabled
-        ? `${settings.data.frequency} às ${String(settings.data.hour).padStart(2, "0")}:00 (${settings.data.timezone}).`
-        : "Agendamento depende da configuração do backend.",
+        ? `${settings.data.frequency} as ${String(settings.data.hour).padStart(2, "0")}:00 (${settings.data.timezone}).`
+        : "Agendamento depende da configuracao do backend.",
       to: "/admin/backup/politica",
     },
     {
-      label: "Teste de restauração",
+      label: "Teste de restauracao",
       done: false,
-      detail: "Restauração depende da configuração do backend e da criptografia.",
+      detail: "Restauracao depende da configuracao do backend e da criptografia.",
       to: "/admin/backup/restauracao",
     },
   ];
 
-  const podeExecutar = destinations.data.some((d) => d.status === "conectado");
-
   return (
     <div className="space-y-6">
-      {/* Aviso: dependência do backend */}
       <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-100/90 backdrop-blur-sm">
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-amber-300">
           <ShieldCheck className="h-3.5 w-3.5" />
-          Execução de backup
+          Execucao de backup
         </div>
         <p className="mt-1.5 text-xs text-amber-100/80">
-          A execução automática (Google Sheets / destinos externos) roda por meio de um worker de
-          servidor. Fora do ambiente Lovable esse worker precisa ser reprovisionado — nenhum backup
-          é disparado a partir do navegador. Este painel continua mostrando o estado real: se não
-          houver execução recente, é porque o worker está indisponível neste deploy.
+          O disparo manual agora usa a edge function autenticada do Supabase. Se o backend ainda nao
+          tiver credenciais externas aprovadas, a falha real sera exibida sem mascaramento.
         </p>
       </div>
 
-      {/* Estado geral */}
       <div className="rounded-2xl border border-border/60 bg-gradient-to-br from-card/60 to-card/30 p-6 backdrop-blur-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
               <ShieldCheck className="h-3.5 w-3.5 text-[color:var(--gold)]" />
-              Proteção dos dados
+              Protecao dos dados
             </div>
             <h2 className="mt-2 font-display text-2xl text-foreground sm:text-3xl">
               {alerts.some((a) => a.severity === "critico")
-                ? "Proteção ainda não configurada"
-                : podeExecutar
-                  ? "Proteção operacional"
-                  : "Configuração em andamento"}
+                ? "Protecao ainda nao configurada"
+                : "Protecao operacional"}
             </h2>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Nenhum dado fictício é exibido: destinos, execuções e agendamento refletem exatamente
+              Nenhum dado ficticio e exibido: destinos, execucoes e agendamento refletem exatamente
               o estado do backend.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               className="btn-gold"
-              disabled
-              title="Aguardando worker/edge function de execução de backup"
+              disabled={running}
+              onClick={handleRunBackup}
+              title="Dispara a edge function autenticada de backup manual."
             >
               <Sparkles className="mr-1.5 h-4 w-4" />
-              Executar backup manual
+              {running ? "Executando..." : "Executar backup manual"}
             </Button>
             <Button asChild variant="outline">
               <Link to="/admin/backup/destinos">
@@ -167,22 +183,14 @@ export default function BackupOverviewPage() {
             </Button>
           </div>
         </div>
-        {!podeExecutar && (
-          <p className="mt-3 text-[11px] text-muted-foreground/80">
-            Execução manual dependerá de um destino conectado e do worker de backup no backend. Nada
-            é executado a partir do navegador.
-          </p>
-        )}
       </div>
 
-      {/* Checklist da proteção */}
       <ProtectionChecklist items={checklist} />
 
-      {/* Cards principais */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricRow
           icon={History}
-          label="Último backup"
+          label="Ultimo backup"
           value={ultimo ? formatDateTime(ultimo.started_at) : "—"}
           hint={
             ultimo
@@ -193,13 +201,13 @@ export default function BackupOverviewPage() {
         />
         <MetricRow
           icon={Calendar}
-          label="Próximo backup"
+          label="Proximo backup"
           value={
             settings.data?.auto_enabled
               ? `${settings.data.frequency} · ${String(settings.data.hour).padStart(2, "0")}:00`
               : "—"
           }
-          hint={settings.data?.auto_enabled ? settings.data.timezone : "Agendamento não ativado"}
+          hint={settings.data?.auto_enabled ? settings.data.timezone : "Agendamento nao ativado"}
         />
         <MetricRow
           icon={Cloud}
@@ -210,9 +218,9 @@ export default function BackupOverviewPage() {
         />
         <MetricRow
           icon={Cloud}
-          label="Destino secundário"
+          label="Destino secundario"
           value={segundoDestino ? DESTINATION_LABELS[segundoDestino.kind] : "—"}
-          hint={segundoDestino ? segundoDestino.label : "Opcional para redundância"}
+          hint={segundoDestino ? segundoDestino.label : "Opcional para redundancia"}
           status={segundoDestino?.status ?? "nao_configurado"}
         />
         <MetricRow
@@ -221,8 +229,8 @@ export default function BackupOverviewPage() {
           value={ultimo?.checksum_sha256 ? "Hash registrado" : "—"}
           hint={
             ultimo?.checksum_sha256
-              ? `${ultimo.checksum_sha256.slice(0, 12)}…`
-              : "Nenhuma validação realizada"
+              ? `${ultimo.checksum_sha256.slice(0, 12)}...`
+              : "Nenhuma validacao realizada"
           }
           status={
             ultimo ? (ultimo.status === "completed" ? "conectado" : ultimo.status) : undefined
@@ -230,18 +238,17 @@ export default function BackupOverviewPage() {
         />
       </div>
 
-      {/* Proteção por conteúdo */}
       <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
           <Database className="h-3.5 w-3.5 text-[color:var(--gold)]" />
-          Cobertura da proteção
+          Cobertura da protecao
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
             { icon: Database, label: "Banco de dados" },
             { icon: Files, label: "Documentos e PDFs" },
             { icon: FileSignature, label: "Assinaturas" },
-            { icon: Download, label: "Configurações" },
+            { icon: Download, label: "Configuracoes" },
           ].map((c) => {
             const inclui = settings.data?.content?.[c.label] ?? true;
             return (
@@ -254,10 +261,10 @@ export default function BackupOverviewPage() {
                   {c.label}
                 </div>
                 <div className="mt-2 text-sm text-foreground">
-                  {inclui ? "Incluído" : "Excluído"}
+                  {inclui ? "Incluido" : "Excluido"}
                 </div>
                 <div className="mt-1 text-[11px] text-muted-foreground/70">
-                  {ultimo ? "presente no último pacote" : "aguardando primeira execução"}
+                  {ultimo ? "presente no ultimo pacote" : "aguardando primeira execucao"}
                 </div>
               </div>
             );
@@ -265,7 +272,6 @@ export default function BackupOverviewPage() {
         </div>
       </div>
 
-      {/* Alertas ativos */}
       {alerts.length > 0 && (
         <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -289,9 +295,9 @@ export default function BackupOverviewPage() {
                       }
                       label={
                         a.severity === "critico"
-                          ? "Crítico"
+                          ? "Critico"
                           : a.severity === "atencao"
-                            ? "Atenção"
+                            ? "Atencao"
                             : "Info"
                       }
                     />
@@ -313,8 +319,8 @@ export default function BackupOverviewPage() {
       {overview.error && (
         <EmptyState
           icon={ShieldCheck}
-          title="Não foi possível carregar o estado da proteção"
-          description="Verifique se você está autenticado como administrador. Nenhum dado é exibido em modo de fallback."
+          title="Nao foi possivel carregar o estado da protecao"
+          description="Verifique se voce esta autenticado como administrador. Nenhum dado e exibido em modo de fallback."
         />
       )}
     </div>

@@ -1,18 +1,17 @@
 // ============================================================================
-// Camada provisória de dados administrativos.
+// Camada provisoria de dados administrativos.
 //
-// Estes hooks já usam a assinatura final (AsyncState<T>) para que a UI não
-// precise mudar quando as integrações reais forem ligadas. Hoje eles apenas
-// devolvem estruturas vazias (ou o array estático de tatuadores que já existe
-// no projeto). NADA aqui deve ser exposto ao usuário como dado real — todos
-// os módulos que ainda dependem de banco/integração retornam isEmpty=true.
+// Estes hooks ja usam a assinatura final (AsyncState<T>) para que a UI nao
+// precise mudar quando as integracoes reais forem ligadas. Os modulos que ainda
+// nao foram conectados ao backend continuam retornando estado vazio honesto.
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { TATUADORES } from "@/lib/termo";
+import { supabase } from "@/integrations/supabase/client";
 import { useAdminClients } from "@/lib/clientes-admin";
 import { useCheckInsList, todayISO } from "@/lib/checkins";
 import { useRiskAlerts } from "@/lib/risk";
+import { TATUADORES } from "@/lib/termo";
 import type {
   Activity,
   AdminDocument,
@@ -36,11 +35,8 @@ function ready<T>(data: T, isEmpty = false): AsyncState<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Tatuadores — único dado hoje presente no código (src/lib/termo.ts).
-// Marcado como PROVISÓRIO: quando existir tabela de tatuadores no backend,
-// este hook passa a consultá-la e o resto da UI continua igual.
+// Tatuadores - unico dado hoje presente no codigo (src/lib/termo.ts).
 // ---------------------------------------------------------------------------
-/** @provisional — substituir por consulta real quando o backend expuser tatuadores */
 export function useTatuadores(): AsyncState<TattooArtist[]> {
   const [state] = useState<AsyncState<TattooArtist[]>>(() => {
     const list: TattooArtist[] = TATUADORES.map((nome, i) => ({
@@ -63,10 +59,6 @@ function gerarIniciais(nome: string): string {
   return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
 }
 
-// ---------------------------------------------------------------------------
-// Todos os demais domínios abaixo aguardam integração — retornam vazio.
-// A UI mostra <EmptyState /> profissional em cada caso.
-// ---------------------------------------------------------------------------
 export function useClientes(): AsyncState<Client[]> {
   const { data, isLoading, error } = useAdminClients();
   const mapped: Client[] = data.map((c) => ({
@@ -139,55 +131,144 @@ export function useAtividadeRecente(): AsyncState<Activity[]> {
   return empty<Activity[]>([]);
 }
 
-// ---------------------------------------------------------------------------
-// Integrações — todas iniciam como "nao_configurado". Não fingir conexão.
-// ---------------------------------------------------------------------------
 export function useIntegracoes(): AsyncState<IntegrationInfo[]> {
-  const lista: IntegrationInfo[] = [
-    {
-      kind: "database",
-      label: "Banco de dados",
-      descricao: "Persistência principal dos registros do estúdio.",
-      status: "nao_configurado",
-    },
-    {
-      kind: "google_drive",
-      label: "Google Drive",
-      descricao: "Armazenamento de fichas, contratos e documentos.",
-      status: "nao_configurado",
-    },
-    {
-      kind: "storage",
-      label: "Armazenamento",
-      descricao: "Backup de arquivos e assinaturas.",
-      status: "nao_configurado",
-    },
-    {
-      kind: "email",
-      label: "E-mail transacional",
-      descricao: "Confirmações, recuperação de acesso e avisos.",
-      status: "nao_configurado",
-    },
-    {
-      kind: "calendar",
-      label: "Calendário",
-      descricao: "Sincronização de sessões e agendamentos.",
-      status: "nao_configurado",
-    },
-    {
-      kind: "whatsapp",
-      label: "WhatsApp",
-      descricao: "Notificação de check-ins e mensagens ao cliente.",
-      status: "nao_configurado",
-    },
-  ];
-  return ready(lista);
+  const [state, setState] = useState<AsyncState<IntegrationInfo[]>>({
+    data: [],
+    isLoading: true,
+    isEmpty: true,
+    error: null,
+  });
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      try {
+        const [dbRes, storageRes, destinationsRes, spreadsheetRes] = await Promise.allSettled([
+          supabase.from("clientes").select("cpf", { head: true, count: "exact" }),
+          supabase.storage.getBucket("assinaturas"),
+          supabase
+            .from("backup_destinations")
+            .select("kind, label, status, last_error")
+            .order("criado_em", { ascending: true }),
+          supabase
+            .from("app_config")
+            .select("value")
+            .eq("key", "backup_spreadsheet_id")
+            .maybeSingle(),
+        ]);
+
+        const dbOk = dbRes.status === "fulfilled" && !dbRes.value.error;
+        const storageOk = storageRes.status === "fulfilled" && !storageRes.value.error;
+        const destinationRows =
+          destinationsRes.status === "fulfilled" && !destinationsRes.value.error
+            ? ((destinationsRes.value.data ?? []) as Array<{
+                kind: string;
+                label: string;
+                status: string;
+                last_error: string | null;
+              }>)
+            : [];
+        const spreadsheetId =
+          spreadsheetRes.status === "fulfilled" && !spreadsheetRes.value.error
+            ? spreadsheetRes.value.data?.value
+            : null;
+
+        const googleDriveTargets = destinationRows.filter((row) => row.kind === "google_drive");
+        const googleDriveConnected = googleDriveTargets.find((row) => row.status === "conectado");
+        const googleDriveErro = googleDriveTargets.find((row) => row.status === "erro");
+        const googleDrivePendente = googleDriveTargets.find((row) =>
+          ["configuracao_incompleta", "nao_configurado", "desativado"].includes(row.status),
+        );
+
+        const lista: IntegrationInfo[] = [
+          {
+            kind: "database",
+            label: "Banco de dados",
+            descricao: "Persistencia principal dos registros do estudio.",
+            status: dbOk ? "conectado" : "erro",
+            statusDetail: dbOk
+              ? "Leitura autenticada das tabelas administrativas em funcionamento."
+              : "O frontend nao conseguiu validar leitura autenticada no banco.",
+          },
+          {
+            kind: "google_drive",
+            label: "Google Drive",
+            descricao: "Armazenamento de fichas, contratos e documentos.",
+            status: googleDriveConnected
+              ? "conectado"
+              : googleDriveErro
+                ? "erro"
+                : googleDrivePendente || spreadsheetId
+                  ? "pendente"
+                  : "nao_configurado",
+            statusDetail: googleDriveConnected
+              ? `Destino ativo: ${googleDriveConnected.label}.`
+              : googleDriveErro?.last_error
+                ? `Ultimo erro: ${googleDriveErro.last_error}`
+                : spreadsheetId
+                  ? "Planilha de backup ja registrada, mas sem destino conectado no painel."
+                  : "Nenhum destino Google configurado no backend.",
+          },
+          {
+            kind: "storage",
+            label: "Armazenamento",
+            descricao: "Backup de arquivos e assinaturas.",
+            status: storageOk ? "conectado" : "erro",
+            statusDetail: storageOk
+              ? "Bucket 'assinaturas' acessivel para uploads autenticados."
+              : "Bucket 'assinaturas' indisponivel ou sem permissao neste deploy.",
+          },
+          {
+            kind: "email",
+            label: "E-mail transacional",
+            descricao: "Confirmacoes, recuperacao de acesso e avisos.",
+            status: "pendente",
+            statusDetail: "Fluxo seguro de diagnostico ainda depende de backend dedicado.",
+          },
+          {
+            kind: "calendar",
+            label: "Calendario",
+            descricao: "Sincronizacao de sessoes e agendamentos.",
+            status: "nao_configurado",
+            statusDetail: "Nenhuma integracao de calendario foi provisionada ate agora.",
+          },
+          {
+            kind: "whatsapp",
+            label: "WhatsApp",
+            descricao: "Notificacao de check-ins e mensagens ao cliente.",
+            status: "nao_configurado",
+            statusDetail: "Nenhum backend de envio ou webhook foi configurado ate agora.",
+          },
+        ];
+
+        if (!alive) return;
+        setState({
+          data: lista,
+          isLoading: false,
+          isEmpty: false,
+          error: null,
+        });
+      } catch (error) {
+        if (!alive) return;
+        setState({
+          data: [],
+          isLoading: false,
+          isEmpty: true,
+          error: error instanceof Error ? error : new Error("Falha ao carregar integracoes"),
+        });
+      }
+    }
+
+    load();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return state;
 }
 
-// ---------------------------------------------------------------------------
-// Configurações gerais — persistidas apenas em localStorage nesta fase.
-// Sinalizado internamente para futura migração ao backend.
-// ---------------------------------------------------------------------------
 const SETTINGS_KEY = "ink_studio_admin_settings_v1";
 
 export const DEFAULT_SETTINGS: SystemSettings = {
@@ -204,7 +285,6 @@ export const DEFAULT_SETTINGS: SystemSettings = {
   descricao: "",
 };
 
-/** @provisional — persistência somente local; migrar para backend quando houver integração */
 export function loadSettings(): SystemSettings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
   try {
@@ -216,7 +296,6 @@ export function loadSettings(): SystemSettings {
   }
 }
 
-/** @provisional — persistência somente local; migrar para backend quando houver integração */
 export function saveSettings(next: SystemSettings) {
   if (typeof window === "undefined") return;
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
@@ -225,7 +304,6 @@ export function saveSettings(next: SystemSettings) {
 export function useSettings(): [SystemSettings, (next: SystemSettings) => void] {
   const [settings, setSettings] = useState<SystemSettings>(() => loadSettings());
   useEffect(() => {
-    // hidrata em caso de mudança externa (outra aba)
     setSettings(loadSettings());
   }, []);
   const update = (next: SystemSettings) => {
