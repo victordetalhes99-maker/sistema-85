@@ -27,20 +27,69 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    document.title = "Redefinir senha — 85 TATTOO";
+    document.title = "Redefinir senha - 85 TATTOO";
   }, []);
 
   useEffect(() => {
-    // Supabase entrega o evento PASSWORD_RECOVERY no retorno do e-mail.
+    let active = true;
+
+    async function bootstrapRecovery() {
+      const currentUrl = new URL(window.location.href);
+      const hashParams = new URLSearchParams(currentUrl.hash.replace(/^#/, ""));
+      const searchParams = currentUrl.searchParams;
+
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+      const recoveryType = hashParams.get("type");
+      const authCode = searchParams.get("code");
+
+      if (accessToken && refreshToken) {
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+
+        if (!active) return;
+
+        if (!sessionError) {
+          setHasRecovery(recoveryType === "recovery" || true);
+          window.history.replaceState({}, document.title, "/reset-password");
+          return;
+        }
+      }
+
+      if (authCode) {
+        const { data, error: codeError } = await supabase.auth.exchangeCodeForSession(authCode);
+
+        if (!active) return;
+
+        if (!codeError && data.session) {
+          setHasRecovery(true);
+          window.history.replaceState({}, document.title, "/reset-password");
+          return;
+        }
+      }
+
+      const { data } = await supabase.auth.getSession();
+
+      if (!active) return;
+
+      if (data.session) setHasRecovery(true);
+      else setHasRecovery(false);
+    }
+
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
       if (event === "PASSWORD_RECOVERY") setHasRecovery(true);
       else if (session) setHasRecovery(true);
     });
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setHasRecovery(true);
-      else setHasRecovery(false);
-    });
-    return () => sub.subscription.unsubscribe();
+
+    void bootstrapRecovery();
+
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
   const score = passwordStrength(pw);
@@ -56,7 +105,7 @@ export default function ResetPasswordPage() {
     try {
       const { error: err } = await supabase.auth.updateUser({ password: pw });
       if (err) {
-        setError(err.message || "Não foi possível atualizar a senha.");
+        setError(err.message || "Nao foi possivel atualizar a senha.");
         return;
       }
       toast.success("Senha redefinida com sucesso.");
@@ -84,13 +133,13 @@ export default function ResetPasswordPage() {
 
         {hasRecovery === false ? (
           <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6 text-sm text-amber-300/90">
-            Este link é inválido ou já expirou. Solicite uma nova recuperação de senha.
+            Este link e invalido ou ja expirou. Solicite uma nova recuperacao de senha.
             <div className="mt-4">
               <Link
                 to="/forgot-password"
                 className="text-xs text-[color:var(--gold)] hover:underline"
               >
-                Solicitar nova recuperação
+                Solicitar nova recuperacao
               </Link>
             </div>
           </div>
@@ -122,7 +171,7 @@ export default function ResetPasswordPage() {
                 </button>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Mínimo de 8 caracteres, com maiúsculas, minúsculas e números.
+                Minimo de 8 caracteres, com maiusculas, minusculas e numeros.
               </p>
             </div>
 
@@ -138,7 +187,7 @@ export default function ResetPasswordPage() {
                 disabled={submitting || hasRecovery === null}
               />
               {confirm && !match && (
-                <p className="text-[11px] text-red-300">As senhas não coincidem.</p>
+                <p className="text-[11px] text-red-300">As senhas nao coincidem.</p>
               )}
             </div>
 
@@ -154,7 +203,7 @@ export default function ResetPasswordPage() {
             <Button type="submit" className="w-full" disabled={!canSubmit}>
               {submitting ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Salvando…
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Salvando...
                 </>
               ) : (
                 "Salvar nova senha"

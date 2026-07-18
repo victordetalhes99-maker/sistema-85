@@ -6,13 +6,29 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+function getResetRedirectUrl() {
+  const configuredOrigin = import.meta.env.VITE_PUBLIC_APP_URL?.trim();
+
+  if (configuredOrigin) {
+    return `${configuredOrigin.replace(/\/+$/, "")}/reset-password`;
+  }
+
+  const { origin, hostname } = window.location;
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "https://sistema85.victordetalhes99.workers.dev/reset-password";
+  }
+
+  return `${origin}/reset-password`;
+}
+
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
 
   useEffect(() => {
-    document.title = "Recuperar senha — 85 TATTOO";
+    document.title = "Recuperar senha - 85 TATTOO";
   }, []);
 
   async function handleSubmit(e: FormEvent) {
@@ -22,9 +38,8 @@ export default function ForgotPasswordPage() {
     if (!clean) return;
     setSubmitting(true);
     try {
-      // Resposta sempre genérica — não revela se conta existe.
       await supabase.auth.resetPasswordForEmail(clean, {
-        redirectTo: `${window.location.origin}/reset-password`,
+        redirectTo: getResetRedirectUrl(),
       });
     } catch {
       /* silencioso */
@@ -45,17 +60,17 @@ export default function ForgotPasswordPage() {
             Recuperar senha
           </h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            Enviaremos instruções para o e-mail informado, se houver uma conta vinculada.
+            Enviaremos instrucoes para o e-mail informado, se houver uma conta vinculada.
           </p>
         </div>
 
         {sent ? (
           <div className="rounded-2xl border border-border/60 bg-background/60 p-6 text-sm text-muted-foreground">
-            Se existir uma conta vinculada a esse e-mail, enviaremos as instruções em instantes.
-            Verifique também a pasta de spam.
+            Se existir uma conta vinculada a esse e-mail, enviaremos as instrucoes em instantes.
+            Verifique tambem a pasta de spam.
             <div className="mt-4">
               <Link to="/admin-login" className="text-xs text-[color:var(--gold)] hover:underline">
-                ← Voltar ao login
+                {"<-"} Voltar ao login
               </Link>
             </div>
           </div>
@@ -81,10 +96,10 @@ export default function ForgotPasswordPage() {
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando…
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando...
                 </>
               ) : (
-                "Enviar instruções"
+                "Enviar instrucoes"
               )}
             </Button>
             <div className="text-center">
@@ -92,7 +107,7 @@ export default function ForgotPasswordPage() {
                 to="/admin-login"
                 className="text-xs text-muted-foreground hover:text-foreground"
               >
-                ← Voltar ao login
+                {"<-"} Voltar ao login
               </Link>
             </div>
           </form>
