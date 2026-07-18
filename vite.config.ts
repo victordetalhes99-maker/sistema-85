@@ -8,7 +8,7 @@ import tsconfigPaths from "vite-tsconfig-paths";
  *
  * Variáveis obrigatórias no ambiente de build (produção):
  *   - VITE_SUPABASE_URL
- *   - VITE_SUPABASE_PUBLISHABLE_KEY
+ *   - VITE_SUPABASE_PUBLISHABLE_KEY ou VITE_SUPABASE_ANON_KEY
  *
  * Em produção (Cloudflare Pages) essas variáveis DEVEM ser fornecidas pelo
  * painel. Sem elas o build falha de forma explícita — não usamos fallback
@@ -21,12 +21,12 @@ export default defineConfig(({ mode, command }) => {
   const isProd = mode === "production";
 
   const url = env.VITE_SUPABASE_URL;
-  const key = env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  const key = env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY;
 
   if (isBuild && isProd) {
     const missing: string[] = [];
     if (!url) missing.push("VITE_SUPABASE_URL");
-    if (!key) missing.push("VITE_SUPABASE_PUBLISHABLE_KEY");
+    if (!key) missing.push("VITE_SUPABASE_PUBLISHABLE_KEY ou VITE_SUPABASE_ANON_KEY");
     if (missing.length) {
       throw new Error(
         `[vite] Variáveis públicas ausentes no build de produção: ${missing.join(

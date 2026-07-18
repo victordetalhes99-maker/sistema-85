@@ -4,7 +4,8 @@ import { logSecure } from "@/lib/logger";
 import type { Database } from "./types";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const SUPABASE_PUBLISHABLE_KEY =
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 function extractProjectRef(value: string | undefined): string | null {
   if (!value) return null;
@@ -56,5 +57,8 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
 logSecure("debug", "[supabase-client] environment", {
   urlConfigured: Boolean(SUPABASE_URL),
   publishableKeyConfigured: Boolean(SUPABASE_PUBLISHABLE_KEY),
+  usingAnonFallback:
+    !import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY &&
+    Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY),
   projectRef: extractProjectRef(SUPABASE_URL),
 });

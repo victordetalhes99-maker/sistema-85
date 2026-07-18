@@ -30,7 +30,12 @@ import { formatDateBR, formatDateTimeBR, maskCpfSafe, parseFichaId } from "@/lib
 // ---------------------------------------------------------------------------
 
 export type RiskAlertStatus =
-  "pending_review" | "under_review" | "reviewed" | "requires_attention" | "released" | "archived";
+  | "pending_review"
+  | "under_review"
+  | "reviewed"
+  | "requires_attention"
+  | "released"
+  | "archived";
 
 export type RiskAlertOrigin = "primeira_visita" | "recorrente";
 

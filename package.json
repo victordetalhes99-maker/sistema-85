@@ -11,9 +11,10 @@
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "validate": "bun run typecheck && bun run lint && bun run test && bun run build",
     "format": "prettier --write .",
-    "deploy": "bun run build && wrangler deploy",
-    "preview:cloudflare": "bun run build && wrangler dev"
+    "deploy": "bun run build && bunx wrangler deploy",
+    "preview:cloudflare": "bun run build && bunx wrangler dev"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -73,7 +74,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@eslint/js": "9.32.0",
+    "@eslint/js": "^9.32.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.16.5",
@@ -81,7 +82,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.4",
     "@vitejs/plugin-react-swc": "^4.3.1",
-    "eslint": "9.32.0",
+    "eslint": "^9.32.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",
     "eslint-plugin-react-hooks": "^5.2.0",
@@ -90,7 +91,7 @@
     "jsdom": "^29.1.1",
     "prettier": "^3.7.3",
     "typescript": "^5.8.3",
-    "typescript-eslint": "8.56.1",
+    "typescript-eslint": "^8.56.1",
     "vite": "^7.3.1",
     "vitest": "^4.1.6",
     "wrangler": "^4.111.0"

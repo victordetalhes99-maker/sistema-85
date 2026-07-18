@@ -84,7 +84,12 @@ export interface ContratoDetalhe extends ContratoResumo {
 }
 
 export type ContratoEventoTipo =
-  "created" | "reviewed" | "terms_accepted" | "signature_registered" | "signed" | "pdf_generated";
+  | "created"
+  | "reviewed"
+  | "terms_accepted"
+  | "signature_registered"
+  | "signed"
+  | "pdf_generated";
 
 export interface ContratoEvento {
   tipo: ContratoEventoTipo;
