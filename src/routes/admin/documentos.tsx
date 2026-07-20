@@ -26,7 +26,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { TATUADORES } from "@/lib/termo";
 import {
   DEFAULT_DOCUMENTOS_FILTERS,
   STATUS_LABEL,
@@ -43,6 +42,7 @@ import {
   type DocumentosFilters,
 } from "@/lib/documentos";
 import { exportDocumentosPdf, exportDocumentosXlsx } from "@/lib/documentos/export";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 const STATUS_TONE: Record<DocumentoStatus, string> = {
   disponivel: "bg-emerald-500/10 text-emerald-600 border-emerald-500/30",
@@ -59,6 +59,7 @@ const TIPO_ICON: Record<DocumentoTipo, typeof Files> = {
 };
 
 export default function AdminDocumentosPage() {
+  const tattooArtists = useActiveTattooArtistNames();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useDocumentos();
   const [filters, setFilters] = useState<DocumentosFilters>(DEFAULT_DOCUMENTOS_FILTERS);
@@ -210,7 +211,7 @@ export default function AdminDocumentosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os tatuadores</SelectItem>
-                {TATUADORES.map((t) => (
+                {tattooArtists.map((t) => (
                   <SelectItem key={t} value={t}>
                     {t}
                   </SelectItem>

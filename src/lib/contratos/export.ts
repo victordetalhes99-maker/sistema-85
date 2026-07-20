@@ -1,19 +1,8 @@
-// ============================================================================
-// Exportações do módulo Contratos
-// ----------------------------------------------------------------------------
-//   • exportContratosPdf  — PDF da listagem filtrada (auditoria e arquivo)
-//   • exportContratosXlsx — planilha equivalente
-//   • gerarContratoPdf    — PDF individual do contrato assinado (formal, com
-//                           texto reconstruído da versão + assinatura embutida
-//                           + verificação de hash de integridade)
-// ============================================================================
-
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { getAssinaturaUrl } from "@/lib/clientes";
 import {
-  formatDateBR,
   formatDateTimeBR,
   ORIGEM_LABEL,
   STATUS_LABEL,
@@ -21,17 +10,28 @@ import {
   type ContratoResumo,
   type ContratosFilters,
 } from "./index";
-import { getContractTemplate, sha256Hex } from "./templates";
+import { sha256Hex } from "./templates";
 
 const GOLD: [number, number, number] = [201, 162, 39];
 const BLACK: [number, number, number] = [17, 17, 17];
 const GRAPHITE: [number, number, number] = [60, 60, 60];
+const LEGACY_NOTICE = "Documento legado sem snapshot integral";
+
+function slugify(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
 
 function now() {
   return new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
-function fileBase(prefix = "contratos"): string {
-  return `85-tattoo-${prefix}-${new Date().toISOString().slice(0, 10)}`;
+
+function fileBase(prefix: string, filePrefix = "documento"): string {
+  return `${slugify(filePrefix || "documento")}-${prefix}-${new Date().toISOString().slice(0, 10)}`;
 }
 
 function filtersLines(f: ContratosFilters, total: number): string[] {
@@ -42,58 +42,117 @@ function filtersLines(f: ContratosFilters, total: number): string[] {
   if (f.assinatura) out.push(`Assinatura: ${f.assinatura === "com" ? "presente" : "ausente"}`);
   if (f.origem) out.push(`Origem: ${ORIGEM_LABEL[f.origem]}`);
   if (f.versao) out.push(`Versão: ${f.versao}`);
-  if (f.periodo)
+  if (f.periodo) {
     out.push(
-      `Período: ${f.periodo === "hoje" ? "hoje" : f.periodo === "7d" ? "últimos 7 dias" : "últimos 30 dias"}`,
+      `Período: ${
+        f.periodo === "hoje" ? "hoje" : f.periodo === "7d" ? "últimos 7 dias" : "últimos 30 dias"
+      }`,
     );
+  }
   out.push(`Registros: ${total}`);
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Listagem — PDF
-// ---------------------------------------------------------------------------
+function listBrand(rows: ContratoResumo[]) {
+  const first = rows[0];
+  return {
+    filePrefix: first?.filePrefix || "documento",
+    studioDisplayName: first?.studioDisplayName || "Contratos",
+  };
+}
+
+export interface ResolvedContratoExportData {
+  filePrefix: string;
+  studioDisplayName: string;
+  studioCompanyName: string | null;
+  pdfHeader: string | null;
+  pdfFooter: string | null;
+  fileName: string;
+  title: string;
+  version: string;
+  renderedText: string | null;
+  displayText: string;
+  isLegacy: boolean;
+  legacyNotice: string | null;
+  integrityStatus: string;
+  calculatedHash: string | null;
+}
+
+export async function resolveContratoExportData(
+  contrato: ContratoDetalhe,
+): Promise<ResolvedContratoExportData> {
+  const renderedText = contrato.renderedText?.trim() || null;
+  const isLegacy = !renderedText;
+  const calculatedHash = renderedText ? await sha256Hex(renderedText) : null;
+  const integrityStatus =
+    !renderedText || !contrato.textoHash
+      ? "não verificado"
+      : calculatedHash === contrato.textoHash
+        ? "íntegro"
+        : "divergente";
+
+  return {
+    filePrefix: contrato.filePrefix || "documento",
+    studioDisplayName: contrato.studioDisplayName,
+    studioCompanyName: contrato.studioCompanyName,
+    pdfHeader: contrato.pdfHeader,
+    pdfFooter: contrato.pdfFooter,
+    fileName: fileBase(
+      `contrato-${contrato.cliente.cpf}-${contrato.versao}-${contrato.id.slice(0, 8)}`,
+      contrato.filePrefix,
+    ),
+    title: contrato.documentLabel,
+    version: contrato.versao,
+    renderedText,
+    displayText:
+      renderedText ??
+      `${LEGACY_NOTICE}\n\nEste registro foi criado antes da captura integral do texto aceito. O sistema preserva metadados e hash armazenado, mas não reconstrói retroativamente um snapshot sem prova do conteúdo exibido no momento do aceite.`,
+    isLegacy,
+    legacyNotice: isLegacy ? LEGACY_NOTICE : null,
+    integrityStatus,
+    calculatedHash,
+  };
+}
 
 export function exportContratosPdf(rows: ContratoResumo[], filters: ContratosFilters): void {
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-  const w = doc.internal.pageSize.getWidth();
+  const width = doc.internal.pageSize.getWidth();
+  const brand = listBrand(rows);
 
   doc.setFillColor(...BLACK);
-  doc.rect(0, 0, w, 68, "F");
+  doc.rect(0, 0, width, 68, "F");
   doc.setFillColor(...GOLD);
-  doc.rect(0, 68, w, 2, "F");
+  doc.rect(0, 68, width, 2, "F");
 
   doc.setTextColor(...GOLD);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
-  doc.text("85 TATTOO", 40, 34);
+  doc.text(brand.studioDisplayName, 40, 34);
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
   doc.text("Contratos e termos assinados", 40, 54);
   doc.setTextColor(220, 220, 220);
   doc.setFontSize(9);
-  doc.text(`Gerado em ${now()}`, w - 40, 34, { align: "right" });
+  doc.text(`Gerado em ${now()}`, width - 40, 34, { align: "right" });
 
   doc.setTextColor(...GRAPHITE);
   doc.setFontSize(9);
   const lines = filtersLines(filters, rows.length);
-  lines.forEach((l, i) => doc.text(l, 40, 92 + i * 12));
-
-  const startY = 92 + lines.length * 12 + 8;
+  lines.forEach((line, index) => doc.text(line, 40, 92 + index * 12));
 
   autoTable(doc, {
-    startY,
-    head: [["Cliente", "CPF", "Tatuador", "Origem", "Versão", "Status", "Assin.", "Aceito em"]],
-    body: rows.map((r) => [
-      r.clienteNome || "—",
-      r.cpfMasked,
-      r.tatuador ?? "—",
-      ORIGEM_LABEL[r.origem],
-      r.versao,
-      STATUS_LABEL[r.status],
-      r.temAssinatura ? "Sim" : "—",
-      formatDateTimeBR(r.aceitoEm),
+    startY: 92 + lines.length * 12 + 8,
+    head: [["Cliente", "CPF", "Tatuador", "Origem", "Versão", "Snapshot", "Status", "Aceito em"]],
+    body: rows.map((row) => [
+      row.clienteNome || "—",
+      row.cpfMasked,
+      row.tatuador ?? "—",
+      ORIGEM_LABEL[row.origem],
+      row.versao,
+      row.hasSnapshot ? "Integral" : "Legado",
+      STATUS_LABEL[row.status],
+      formatDateTimeBR(row.aceitoEm),
     ]),
     styles: { fontSize: 9, cellPadding: 6, textColor: GRAPHITE },
     headStyles: { fillColor: BLACK, textColor: GOLD, fontStyle: "bold" },
@@ -107,27 +166,24 @@ export function exportContratosPdf(rows: ContratoResumo[], filters: ContratosFil
     doc.setFontSize(8);
     doc.setTextColor(140, 140, 140);
     doc.text(
-      `85 TATTOO — Contratos • Página ${i} de ${pages}`,
-      w / 2,
+      `${brand.studioDisplayName} • Contratos • Página ${i} de ${pages}`,
+      width / 2,
       doc.internal.pageSize.getHeight() - 18,
       { align: "center" },
     );
   }
 
-  doc.save(`${fileBase("contratos")}.pdf`);
+  doc.save(`${fileBase("contratos", brand.filePrefix)}.pdf`);
 }
-
-// ---------------------------------------------------------------------------
-// Listagem — XLSX
-// ---------------------------------------------------------------------------
 
 export function exportContratosXlsx(rows: ContratoResumo[], filters: ContratosFilters): void {
   const wb = XLSX.utils.book_new();
+  const brand = listBrand(rows);
   const resumo = [
-    ["85 TATTOO — Contratos e termos"],
+    [`${brand.studioDisplayName} — Contratos e termos`],
     [`Gerado em ${now()}`],
     [],
-    ...filtersLines(filters, rows.length).map((l) => [l]),
+    ...filtersLines(filters, rows.length).map((line) => [line]),
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumo), "Resumo");
 
@@ -139,41 +195,37 @@ export function exportContratosXlsx(rows: ContratoResumo[], filters: ContratosFi
     "Origem",
     "Template",
     "Versão",
+    "Snapshot",
     "Status",
     "Assinatura",
-    "PDF",
     "Aceito em",
   ];
-  const body = rows.map((r) => [
-    r.id,
-    r.clienteNome,
-    r.cpfMasked,
-    r.tatuador ?? "",
-    ORIGEM_LABEL[r.origem],
-    r.templateId,
-    r.versao,
-    STATUS_LABEL[r.status],
-    r.temAssinatura ? "Sim" : "",
-    r.temPdf ? "Sim" : "",
-    formatDateTimeBR(r.aceitoEm),
+  const body = rows.map((row) => [
+    row.id,
+    row.clienteNome,
+    row.cpfMasked,
+    row.tatuador ?? "",
+    ORIGEM_LABEL[row.origem],
+    row.templateId,
+    row.versao,
+    row.hasSnapshot ? "integral" : "legado",
+    STATUS_LABEL[row.status],
+    row.temAssinatura ? "Sim" : "",
+    formatDateTimeBR(row.aceitoEm),
   ]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([header, ...body]), "Contratos");
 
-  XLSX.writeFile(wb, `${fileBase("contratos")}.xlsx`);
+  XLSX.writeFile(wb, `${fileBase("contratos", brand.filePrefix)}.xlsx`);
 }
-
-// ---------------------------------------------------------------------------
-// Contrato individual — PDF formal
-// ---------------------------------------------------------------------------
 
 async function fetchSignatureDataUrl(path: string | null): Promise<string | null> {
   if (!path) return null;
   const url = await getAssinaturaUrl(path);
   if (!url) return null;
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const blob = await res.blob();
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
     return await new Promise<string | null>((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(typeof reader.result === "string" ? reader.result : null);
@@ -186,52 +238,42 @@ async function fetchSignatureDataUrl(path: string | null): Promise<string | null
 }
 
 export async function gerarContratoPdf(contrato: ContratoDetalhe): Promise<void> {
-  const tpl = getContractTemplate(contrato.versao);
-  const texto = tpl.build({ tatuador: contrato.tatuador ?? "—" });
-  const hashCalc = await sha256Hex(texto);
-  const integridade = contrato.textoHash
-    ? hashCalc === contrato.textoHash
-      ? "íntegro"
-      : "divergente"
-    : "não verificado";
+  const exportData = await resolveContratoExportData(contrato);
   const signatureDataUrl = await fetchSignatureDataUrl(contrato.assinaturaPath);
-
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
   const marginX = 50;
-  const contentW = pageW - marginX * 2;
+  const contentWidth = pageWidth - marginX * 2;
 
-  // Cabeçalho
   doc.setFillColor(...BLACK);
-  doc.rect(0, 0, pageW, 90, "F");
+  doc.rect(0, 0, pageWidth, 90, "F");
   doc.setFillColor(...GOLD);
-  doc.rect(0, 90, pageW, 3, "F");
+  doc.rect(0, 90, pageWidth, 3, "F");
 
   doc.setTextColor(...GOLD);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(22);
-  doc.text("85 TATTOO", marginX, 42);
+  doc.text(exportData.pdfHeader || exportData.studioDisplayName, marginX, 42);
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(12);
-  doc.text(tpl.nome, marginX, 66);
+  doc.text(exportData.title, marginX, 66);
   doc.setFontSize(9);
   doc.setTextColor(220, 220, 220);
-  doc.text(`Versão ${contrato.versao}`, pageW - marginX, 42, { align: "right" });
-  doc.text(`Emitido em ${now()}`, pageW - marginX, 60, { align: "right" });
+  doc.text(`Versão ${exportData.version}`, pageWidth - marginX, 42, { align: "right" });
+  doc.text(`Emitido em ${now()}`, pageWidth - marginX, 60, { align: "right" });
 
-  // Bloco de identificação
   let y = 120;
   doc.setDrawColor(...GOLD);
   doc.setLineWidth(0.6);
-  doc.line(marginX, y, pageW - marginX, y);
+  doc.line(marginX, y, pageWidth - marginX, y);
   y += 18;
   doc.setTextColor(...BLACK);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.text("Contratante", marginX, y);
-  doc.text("Contratado", pageW / 2 + 10, y);
+  doc.text("Contratado", pageWidth / 2 + 10, y);
   y += 14;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
@@ -244,31 +286,30 @@ export async function gerarContratoPdf(contrato: ContratoDetalhe): Promise<void>
     contrato.cliente.email ?? "",
   ].filter(Boolean);
   const right = [
-    "85 TATTOO Studio",
+    exportData.studioCompanyName || exportData.studioDisplayName,
     `Tatuador: ${contrato.tatuador ?? "—"}`,
     `Origem: ${ORIGEM_LABEL[contrato.origem]}`,
   ];
-  left.forEach((l, i) => doc.text(l, marginX, y + i * 13));
-  right.forEach((l, i) => doc.text(l, pageW / 2 + 10, y + i * 13));
+  left.forEach((line, index) => doc.text(line, marginX, y + index * 13));
+  right.forEach((line, index) => doc.text(line, pageWidth / 2 + 10, y + index * 13));
   y += Math.max(left.length, right.length) * 13 + 12;
 
   doc.setDrawColor(230, 230, 230);
-  doc.line(marginX, y, pageW - marginX, y);
+  doc.line(marginX, y, pageWidth - marginX, y);
   y += 18;
 
-  // Corpo do termo
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(...BLACK);
-  doc.text("Termo aceito pelo contratante", marginX, y);
+  doc.text("Texto aceito pelo contratante", marginX, y);
   y += 16;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.setTextColor(...GRAPHITE);
 
-  const wrapped = doc.splitTextToSize(texto, contentW);
+  const wrapped = doc.splitTextToSize(exportData.displayText, contentWidth);
   for (const line of wrapped) {
-    if (y > pageH - 200) {
+    if (y > pageHeight - 200) {
       doc.addPage();
       y = 60;
     }
@@ -277,14 +318,13 @@ export async function gerarContratoPdf(contrato: ContratoDetalhe): Promise<void>
   }
 
   y += 20;
-  if (y > pageH - 220) {
+  if (y > pageHeight - 220) {
     doc.addPage();
     y = 60;
   }
 
-  // Assinatura
   doc.setDrawColor(...GOLD);
-  doc.line(marginX, y, pageW - marginX, y);
+  doc.line(marginX, y, pageWidth - marginX, y);
   y += 20;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
@@ -307,26 +347,25 @@ export async function gerarContratoPdf(contrato: ContratoDetalhe): Promise<void>
     doc.setTextColor(...GRAPHITE);
   }
 
-  const rightX = pageW - marginX;
-  const infoY = y;
   const info = [
     `Assinado em: ${formatDateTimeBR(contrato.assinadoEm)}`,
-    `Aceite registrado: ${formatDateTimeBR(contrato.aceitoEm)}`,
+    `Aceite registrado: ${formatDateTimeBR(contrato.aceite.acceptedAt)}`,
     `IP: ${contrato.aceite.ip ?? "—"}`,
-    `User-Agent: ${(contrato.aceite.userAgent ?? "—").slice(0, 60)}`,
+    `Fonte: ${contrato.aceite.source ?? "—"}`,
     `Contrato: ${contrato.id}`,
   ];
-  info.forEach((l, i) => doc.text(l, rightX, infoY + 12 + i * 12, { align: "right" }));
+  info.forEach((line, index) => {
+    doc.text(line, pageWidth - marginX, y + 12 + index * 12, { align: "right" });
+  });
 
   y += 100;
-  if (y > pageH - 90) {
+  if (y > pageHeight - 90) {
     doc.addPage();
     y = 60;
   }
 
-  // Bloco de integridade
   doc.setDrawColor(230, 230, 230);
-  doc.line(marginX, y, pageW - marginX, y);
+  doc.line(marginX, y, pageWidth - marginX, y);
   y += 16;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
@@ -336,28 +375,28 @@ export async function gerarContratoPdf(contrato: ContratoDetalhe): Promise<void>
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(...GRAPHITE);
-  const integridadeLinhas = [
-    `Algoritmo: SHA-256 • Status: ${integridade}`,
+  const integrityLines = [
+    `Algoritmo: SHA-256 • Status: ${exportData.integrityStatus}`,
     `Hash armazenado: ${contrato.textoHash ?? "—"}`,
-    `Hash recalculado: ${hashCalc}`,
-    `Template: ${tpl.id} • Versão ${tpl.versao} • Vigência ${formatDateBR(tpl.vigenciaInicio)}`,
-  ];
-  integridadeLinhas.forEach((l, i) => doc.text(l, marginX, y + i * 11));
+    `Hash calculado: ${exportData.calculatedHash ?? "—"}`,
+    `Template: ${contrato.templateId} • Versão ${contrato.versao}`,
+    exportData.legacyNotice ? `Observação: ${exportData.legacyNotice}` : "",
+  ].filter(Boolean);
+  integrityLines.forEach((line, index) => doc.text(line, marginX, y + index * 11));
 
-  // Rodapé
   const pages = doc.getNumberOfPages();
   for (let i = 1; i <= pages; i++) {
     doc.setPage(i);
     doc.setFontSize(8);
     doc.setTextColor(140, 140, 140);
     doc.text(
-      `85 TATTOO — Contrato ${contrato.id} • Página ${i} de ${pages}`,
-      pageW / 2,
-      pageH - 18,
+      exportData.pdfFooter ||
+        `${exportData.studioDisplayName} • Contrato ${contrato.id} • Página ${i} de ${pages}`,
+      pageWidth / 2,
+      pageHeight - 18,
       { align: "center" },
     );
   }
 
-  const safeCpf = contrato.cliente.cpf;
-  doc.save(`85-tattoo-contrato-${safeCpf}-${contrato.versao}-${contrato.id.slice(0, 8)}.pdf`);
+  doc.save(`${exportData.fileName}.pdf`);
 }

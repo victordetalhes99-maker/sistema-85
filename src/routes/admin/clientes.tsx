@@ -28,7 +28,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { TATUADORES } from "@/lib/termo";
 import {
   DEFAULT_FILTERS,
   type ClientFiltersState,
@@ -39,8 +38,10 @@ import {
   useFilteredClients,
 } from "@/lib/clientes-admin";
 import { exportClientsPdf, exportClientsXlsx } from "@/lib/clientes-admin/export";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 export default function AdminClientesPage() {
+  const tattooArtists = useActiveTattooArtistNames();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useAdminClients();
   const [filters, setFilters] = useState<ClientFiltersState>(DEFAULT_FILTERS);
@@ -201,7 +202,7 @@ export default function AdminClientesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all">Todos os tatuadores</SelectItem>
-                {TATUADORES.map((t) => (
+                {tattooArtists.map((t) => (
                   <SelectItem key={t} value={t}>
                     {t}
                   </SelectItem>

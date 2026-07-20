@@ -2,18 +2,35 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { addSessao, getCliente, type ClientePublico, type Anamnese } from "@/lib/clientes";
-import { toErrorLike } from "@/lib/errors";
 import { SignaturePad } from "@/components/SignaturePad";
-import { buildTermoTexto, TATUADORES } from "@/lib/termo";
-import { CONSENT_TEXT_VERSION, LGPD_REQUIRED_TEXT } from "@/lib/lgpd";
+import {
+  buildConsentSnapshotPayload,
+  buildContractText,
+  buildLgpdText,
+  DocumentConfigError,
+} from "@/lib/document-templates";
+import { createRenderContext, usePublicDocumentContext } from "@/lib/public-document-context";
 import { rateLimit, registrarConsentimento } from "@/lib/lgpd-consent";
+import { toErrorLike } from "@/lib/errors";
 import { logSecure } from "@/lib/logger";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 type Modo = "termo" | "sucesso";
+
+function createAcceptanceId() {
+  return `rec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 export default function RecorrentePage() {
   const cpf = (typeof window !== "undefined" && sessionStorage.getItem("checkin_cpf")) || "";
   const navigate = useNavigate();
+  const tattooArtists = useActiveTattooArtistNames();
+  const {
+    data: documentContext,
+    isLoading: documentContextLoading,
+    error: documentContextError,
+  } = usePublicDocumentContext();
+
   const [cliente, setCliente] = useState<ClientePublico | null>(null);
   const [modo, setModo] = useState<Modo>("termo");
   const [assinatura, setAssinatura] = useState<string | null>(null);
@@ -24,6 +41,8 @@ export default function RecorrentePage() {
   const [tatuadorSelecionado, setTatuadorSelecionado] = useState("");
   const [tatuadorOutro, setTatuadorOutro] = useState("");
   const [busca, setBusca] = useState("");
+  const [acceptanceId] = useState(createAcceptanceId);
+
   const tatuadorFinal = (tatuadorSelecionado || tatuadorOutro).trim();
 
   useEffect(() => {
@@ -38,22 +57,64 @@ export default function RecorrentePage() {
       setCliente(c);
       const anterior = c.tatuador?.trim() ?? "";
       if (anterior) {
-        if ((TATUADORES as readonly string[]).includes(anterior)) setTatuadorSelecionado(anterior);
+        if (tattooArtists.includes(anterior)) setTatuadorSelecionado(anterior);
         else setTatuadorOutro(anterior);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [cpf, navigate]);
+  }, [cpf, navigate, tattooArtists]);
 
   const filtrados = useMemo(
-    () =>
-      (TATUADORES as readonly string[]).filter((t) =>
-        t.toLowerCase().includes(busca.toLowerCase()),
-      ),
-    [busca],
+    () => tattooArtists.filter((t) => t.toLowerCase().includes(busca.toLowerCase())),
+    [busca, tattooArtists],
   );
+
+  const previewContext = useMemo(() => {
+    if (!cliente || !tatuadorFinal) return null;
+    return createRenderContext(documentContext, {
+      acceptedAt: new Date().toISOString(),
+      acceptanceId,
+      source: "sessao_recorrente",
+      client: {
+        cpf,
+        nomeCompleto: cliente.nomeCompleto,
+      },
+      artist: { nome: tatuadorFinal },
+    });
+  }, [acceptanceId, cliente, cpf, documentContext, tatuadorFinal]);
+
+  const legalBlockingMessage = useMemo(() => {
+    if (documentContextError) return documentContextError;
+    if (documentContextLoading) return null;
+    if (documentContext.legalReady) return null;
+    if (documentContext.missingRequiredFields.length === 0) {
+      return "Configuração jurídica incompleta.";
+    }
+    return `Configuração jurídica incompleta. Preencha: ${documentContext.missingRequiredFields.join(", ")}.`;
+  }, [documentContext, documentContextError, documentContextLoading]);
+
+  const termoPreview = useMemo(() => {
+    if (documentContextLoading) return "Carregando termo atual...";
+    if (!previewContext || !tatuadorFinal) return "Selecione o tatuador para carregar o termo.";
+    try {
+      return buildContractText(previewContext);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Falha ao montar o termo.";
+    }
+  }, [documentContextLoading, previewContext, tatuadorFinal]);
+
+  const lgpdPreview = useMemo(() => {
+    if (documentContextLoading) return "Carregando aviso LGPD...";
+    if (!previewContext || !tatuadorFinal)
+      return "Selecione o tatuador para carregar o aviso LGPD.";
+    try {
+      return buildLgpdText(previewContext);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Falha ao montar o aviso LGPD.";
+    }
+  }, [documentContextLoading, previewContext, tatuadorFinal]);
 
   if (!cliente) return null;
 
@@ -61,53 +122,111 @@ export default function RecorrentePage() {
 
   const finalizar = async () => {
     if (!assinatura || !aceito || !aceitoLgpd || !tatuadorFinal || enviando) return;
+    if (!documentContext.legalReady) {
+      const message = legalBlockingMessage ?? "Configuração jurídica incompleta.";
+      setErroEnvio(message);
+      toast.error(message);
+      return;
+    }
+
+    const acceptedAt = new Date().toISOString();
     const sessao = {
-      data: new Date().toISOString(),
+      data: acceptedAt,
       assinatura,
       anamnese: {} as unknown as Anamnese,
       tatuador: tatuadorFinal,
     };
+
     setEnviando(true);
     setErroEnvio(null);
     try {
       const ok = await rateLimit(`cpf:${cpf}:recorrente`, 10, 3600);
       if (!ok) {
-        const m = "Muitas tentativas em pouco tempo. Aguarde alguns minutos.";
-        setErroEnvio(m);
-        toast.error(m);
+        const message = "Muitas tentativas em pouco tempo. Aguarde alguns minutos.";
+        setErroEnvio(message);
+        toast.error(message);
         return;
       }
-      await addSessao(cpf, sessao);
+
+      const sessaoSalva = await addSessao(cpf, sessao);
+      const renderContext = createRenderContext(documentContext, {
+        acceptedAt,
+        acceptanceId,
+        source: "sessao_recorrente",
+        client: {
+          cpf,
+          nomeCompleto: cliente.nomeCompleto,
+        },
+        artist: { nome: tatuadorFinal },
+      });
+
+      const signatureSnapshot = {
+        present: true,
+        source: "clientes.sessoes.assinatura",
+        storagePath: sessaoSalva.assinatura || null,
+      };
+
+      const [lgpdSnapshot, contractSnapshot] = await Promise.all([
+        buildConsentSnapshotPayload("lgpd", renderContext, signatureSnapshot),
+        buildConsentSnapshotPayload("contract", renderContext, signatureSnapshot),
+      ]);
+
       await Promise.allSettled([
         registrarConsentimento({
           cpf,
           tipo: "lgpd",
-          texto: LGPD_REQUIRED_TEXT,
-          versao: CONSENT_TEXT_VERSION,
+          texto: lgpdSnapshot.renderedText,
+          versao: lgpdSnapshot.templateVersion,
           finalidade: "tratamento_dados_procedimento",
           contexto: "sessao_recorrente",
+          consentScope: "required",
+          metadata: { acceptanceId },
+          documentType: lgpdSnapshot.documentType,
+          templateVersion: lgpdSnapshot.templateVersion,
+          templateHash: lgpdSnapshot.templateHash,
+          renderedText: lgpdSnapshot.renderedText,
+          configSnapshot: lgpdSnapshot.configSnapshot,
+          clientSnapshot: lgpdSnapshot.clientSnapshot,
+          artistSnapshot: lgpdSnapshot.artistSnapshot,
+          acceptedAt: lgpdSnapshot.acceptedAt,
+          signatureSnapshot: lgpdSnapshot.signatureSnapshot,
+          source: lgpdSnapshot.source,
         }),
         registrarConsentimento({
           cpf,
           tipo: "termo",
-          texto: buildTermoTexto(tatuadorFinal),
-          versao: CONSENT_TEXT_VERSION,
+          texto: contractSnapshot.renderedText,
+          versao: contractSnapshot.templateVersion,
           finalidade: "autorizacao_procedimento",
           contexto: "sessao_recorrente",
+          consentScope: "required",
+          metadata: { acceptanceId },
+          documentType: contractSnapshot.documentType,
+          templateVersion: contractSnapshot.templateVersion,
+          templateHash: contractSnapshot.templateHash,
+          renderedText: contractSnapshot.renderedText,
+          configSnapshot: contractSnapshot.configSnapshot,
+          clientSnapshot: contractSnapshot.clientSnapshot,
+          artistSnapshot: contractSnapshot.artistSnapshot,
+          acceptedAt: contractSnapshot.acceptedAt,
+          signatureSnapshot: contractSnapshot.signatureSnapshot,
+          source: contractSnapshot.source,
         }),
       ]);
-      setModo("sucesso");
-    } catch (e) {
-      const el = toErrorLike(e);
-      logSecure("warn", "recorrente falhou", { message: el.message, statusCode: el.statusCode });
-      const m = el.message ?? "";
-      const msg =
-        m.includes("storage") || m.includes("upload") || el.statusCode
-          ? "Nao conseguimos enviar sua assinatura. Verifique sua conexao e toque em Reenviar."
-          : "Nao foi possivel registrar a sessao. Toque em Reenviar para tentar de novo.";
 
-      setErroEnvio(msg);
-      toast.error(msg, {
+      setModo("sucesso");
+    } catch (error) {
+      const el = toErrorLike(error);
+      logSecure("warn", "recorrente falhou", { message: el.message, statusCode: el.statusCode });
+      const message =
+        error instanceof DocumentConfigError
+          ? error.message
+          : el.message?.includes("storage") || el.message?.includes("upload") || el.statusCode
+            ? "Não conseguimos enviar sua assinatura. Verifique sua conexão e toque em Reenviar."
+            : "Não foi possível registrar a sessão. Toque em Reenviar para tentar de novo.";
+
+      setErroEnvio(message);
+      toast.error(message, {
         action: { label: "Reenviar", onClick: () => finalizar() },
         duration: 10000,
       });
@@ -135,20 +254,29 @@ export default function RecorrentePage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l5 5L20 7" />
             </svg>
           </div>
-          <h2 className="text-2xl font-light mb-2">Sessao registrada!</h2>
+          <h2 className="text-2xl font-light mb-2">Sessão registrada!</h2>
           <p className="text-muted-foreground mb-6">
-            Bom trabalho, {primeiroNome}. A recepcao ja recebeu sua assinatura.
+            Bom trabalho, {primeiroNome}. A recepção já recebeu sua assinatura.
           </p>
           <button
             onClick={() => navigate("/")}
             className="btn-ghost-gold w-full px-6 py-3 rounded-xl uppercase tracking-[0.2em] text-sm"
           >
-            Voltar ao inicio
+            Voltar ao início
           </button>
         </div>
       </main>
     );
   }
+
+  const submitDisabled =
+    !assinatura ||
+    !aceito ||
+    !aceitoLgpd ||
+    !tatuadorFinal ||
+    enviando ||
+    documentContextLoading ||
+    !documentContext.legalReady;
 
   return (
     <main className="min-h-screen px-4 py-8 sm:py-12">
@@ -162,25 +290,25 @@ export default function RecorrentePage() {
 
         <header className="mt-6 mb-8">
           <p className="text-[10px] tracking-[0.5em] text-gold/80 uppercase mb-2">
-            Bom ver voce de volta!
+            Bom ver você de volta!
           </p>
           <h1 className="text-3xl sm:text-4xl font-light">
-            Ola, <span className="gradient-gold-text font-serif italic">{primeiroNome}</span>!
+            Olá, <span className="gradient-gold-text font-serif italic">{primeiroNome}</span>!
           </h1>
           <p className="text-muted-foreground mt-3 leading-relaxed">
-            Confirme o tatuador, releia o termo e assine para liberar a sessao de hoje.
+            Confirme o tatuador, releia o termo e assine para liberar a sessão de hoje.
           </p>
         </header>
 
         <section className="glass-strong rounded-2xl p-5 sm:p-8">
           <h2 className="text-xl font-light mb-1">Termo de responsabilidade</h2>
           <p className="text-sm text-muted-foreground mb-5">
-            Voce pode manter o mesmo tatuador da ultima visita ou escolher outro.
+            Você pode manter o mesmo tatuador da última visita ou escolher outro.
           </p>
 
           <div className="mb-6">
             <p className="text-[10px] tracking-[0.3em] text-gold/80 uppercase mb-3">
-              Tatuador responsavel
+              Tatuador responsável
             </p>
             <input
               type="text"
@@ -211,8 +339,14 @@ export default function RecorrentePage() {
             )}
           </div>
 
+          {legalBlockingMessage && !documentContextLoading && (
+            <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+              {legalBlockingMessage}
+            </div>
+          )}
+
           <div className="glass rounded-xl p-5 max-h-72 overflow-y-auto text-sm leading-relaxed text-foreground/80 whitespace-pre-line">
-            {buildTermoTexto(tatuadorFinal)}
+            {termoPreview}
           </div>
 
           <label className="flex items-start gap-3 mt-5 cursor-pointer select-none">
@@ -223,16 +357,16 @@ export default function RecorrentePage() {
               className="mt-1 size-4 accent-[oklch(0.82_0.13_85)]"
             />
             <span className="text-sm text-foreground/85">
-              Li, compreendi e aceito o termo necessario ao procedimento.
+              Li, compreendi e aceito o termo necessário ao procedimento.
             </span>
           </label>
 
           <div className="mt-8">
             <p className="text-[10px] tracking-[0.3em] text-gold/80 uppercase mb-3">
-              Protecao de dados - LGPD
+              Proteção de dados - LGPD
             </p>
             <div className="glass rounded-xl p-5 max-h-60 overflow-y-auto text-sm leading-relaxed text-foreground/80 whitespace-pre-line">
-              {LGPD_REQUIRED_TEXT}
+              {lgpdPreview}
             </div>
             <label className="flex items-start gap-3 mt-4 cursor-pointer select-none">
               <input
@@ -242,14 +376,14 @@ export default function RecorrentePage() {
                 className="mt-1 size-4 accent-[oklch(0.82_0.13_85)]"
               />
               <span className="text-sm text-foreground/85">
-                Li, compreendi e aceito o tratamento dos dados estritamente necessario a sessao.
+                Li, compreendi e aceito o tratamento dos dados estritamente necessário à sessão.
               </span>
             </label>
           </div>
 
           <div className="mt-6">
             <p className="text-[10px] tracking-[0.3em] text-gold/80 uppercase mb-3">
-              Assinatura digital - sessao de hoje
+              Assinatura digital - sessão de hoje
             </p>
             <SignaturePad value={assinatura ?? undefined} onChange={setAssinatura} />
           </div>
@@ -257,7 +391,7 @@ export default function RecorrentePage() {
           <div className="mt-8">
             <button
               onClick={finalizar}
-              disabled={!assinatura || !aceito || !aceitoLgpd || !tatuadorFinal || enviando}
+              disabled={submitDisabled}
               className="btn-gold w-full px-6 py-3.5 rounded-xl uppercase tracking-[0.2em] text-sm"
             >
               {enviando ? "Enviando..." : erroEnvio ? "Reenviar" : "Finalizar e enviar"}

@@ -29,7 +29,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { TATUADORES } from "@/lib/termo";
 import {
   CATEGORY_LABEL,
   DEFAULT_RISK_FILTERS,
@@ -46,6 +45,7 @@ import {
 import type { RiskCategory, RiskSeverity } from "@/lib/risk/rules";
 import { useDebounced } from "@/lib/fichas";
 import { exportRiskPdf, exportRiskXlsx } from "@/lib/risk/export";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 const LEVEL_TONE: Record<RiskSeverity, string> = {
   high: "bg-red-500/10 text-red-600 border-red-500/30",
@@ -77,6 +77,7 @@ const CATEGORY_OPTIONS: RiskCategory[] = [
 ];
 
 export default function AdminClientesRiscoPage() {
+  const tattooArtists = useActiveTattooArtistNames();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useRiskAlerts();
   const [filters, setFilters] = useState<RiskFilters>(DEFAULT_RISK_FILTERS);
@@ -254,7 +255,7 @@ export default function AdminClientesRiscoPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os tatuadores</SelectItem>
-                {TATUADORES.map((t) => (
+                {tattooArtists.map((t) => (
                   <SelectItem key={t} value={t}>
                     {t}
                   </SelectItem>

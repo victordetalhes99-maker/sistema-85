@@ -28,7 +28,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { TATUADORES } from "@/lib/termo";
 import {
   DEFAULT_FICHAS_FILTERS,
   type FichasFilters,
@@ -40,8 +39,10 @@ import {
   useFichasFiltradas,
 } from "@/lib/fichas";
 import { exportFichasPdf, exportFichasXlsx } from "@/lib/fichas/export";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 export default function AdminFichasPage() {
+  const tattooArtists = useActiveTattooArtistNames();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useFichas();
   const [filters, setFilters] = useState<FichasFilters>(DEFAULT_FICHAS_FILTERS);
@@ -237,7 +238,7 @@ export default function AdminFichasPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os tatuadores</SelectItem>
-                {TATUADORES.map((t) => (
+                {tattooArtists.map((t) => (
                   <SelectItem key={t} value={t}>
                     {t}
                   </SelectItem>

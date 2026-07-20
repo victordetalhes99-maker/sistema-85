@@ -11,7 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAdminClients } from "@/lib/clientes-admin";
 import { useCheckInsList, todayISO } from "@/lib/checkins";
 import { useRiskAlerts } from "@/lib/risk";
-import { TATUADORES } from "@/lib/termo";
+import { useTattooArtists } from "@/lib/tattoo-artists";
 import type {
   Activity,
   AdminDocument,
@@ -35,28 +35,12 @@ function ready<T>(data: T, isEmpty = false): AsyncState<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Tatuadores - unico dado hoje presente no codigo (src/lib/termo.ts).
+// Tatuadores - fonte real em public.tattoo_artists com métricas derivadas.
 // ---------------------------------------------------------------------------
 export function useTatuadores(): AsyncState<TattooArtist[]> {
-  const [state] = useState<AsyncState<TattooArtist[]>>(() => {
-    const list: TattooArtist[] = TATUADORES.map((nome, i) => ({
-      id: `static-${i}`,
-      nome,
-      iniciais: gerarIniciais(nome),
-      status: "ativo",
-      clientesHoje: null,
-      atendimentosMes: null,
-      ultimaAtividade: null,
-    }));
-    return ready(list, list.length === 0);
-  });
+  const { refetch: _refetch, ...state } = useTattooArtists();
+  void _refetch;
   return state;
-}
-
-function gerarIniciais(nome: string): string {
-  const partes = nome.trim().split(/\s+/);
-  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
-  return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
 }
 
 export function useClientes(): AsyncState<Client[]> {
@@ -269,8 +253,6 @@ export function useIntegracoes(): AsyncState<IntegrationInfo[]> {
   return state;
 }
 
-const SETTINGS_KEY = "ink_studio_admin_settings_v1";
-
 export const DEFAULT_SETTINGS: SystemSettings = {
   nomeEstudio: "85 TATTOO Studio",
   nomeEmpresarial: "",
@@ -284,31 +266,3 @@ export const DEFAULT_SETTINGS: SystemSettings = {
   horario: "",
   descricao: "",
 };
-
-export function loadSettings(): SystemSettings {
-  if (typeof window === "undefined") return DEFAULT_SETTINGS;
-  try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-}
-
-export function saveSettings(next: SystemSettings) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-}
-
-export function useSettings(): [SystemSettings, (next: SystemSettings) => void] {
-  const [settings, setSettings] = useState<SystemSettings>(() => loadSettings());
-  useEffect(() => {
-    setSettings(loadSettings());
-  }, []);
-  const update = (next: SystemSettings) => {
-    setSettings(next);
-    saveSettings(next);
-  };
-  return [settings, update];
-}

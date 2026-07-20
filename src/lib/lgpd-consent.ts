@@ -40,6 +40,18 @@ export interface ConsentInput {
   consentScope?: "required" | "optional";
   titularRef?: string;
   metadata?: Record<string, unknown>;
+  documentType?: string;
+  templateVersion?: string;
+  templateHash?: string;
+  renderedText?: string;
+  renderedHtml?: string | null;
+  configSnapshot?: Record<string, unknown>;
+  clientSnapshot?: Record<string, unknown>;
+  artistSnapshot?: Record<string, unknown>;
+  acceptedAt?: string;
+  acceptedBy?: string | null;
+  signatureSnapshot?: Record<string, unknown>;
+  source?: string;
 }
 
 export async function registrarConsentimento(c: ConsentInput): Promise<void> {
@@ -60,6 +72,18 @@ export async function registrarConsentimento(c: ConsentInput): Promise<void> {
       _consent_scope: c.consentScope ?? "required",
       _titular_ref: c.titularRef ?? null,
       _metadata: (c.metadata ?? {}) as unknown as Json,
+      _document_type: c.documentType ?? null,
+      _template_version: c.templateVersion ?? null,
+      _template_hash: c.templateHash ?? null,
+      _rendered_text: c.renderedText ?? c.texto,
+      _rendered_html: c.renderedHtml ?? null,
+      _config_snapshot: (c.configSnapshot ?? {}) as unknown as Json,
+      _client_snapshot: (c.clientSnapshot ?? {}) as unknown as Json,
+      _artist_snapshot: (c.artistSnapshot ?? {}) as unknown as Json,
+      _accepted_at: c.acceptedAt ?? new Date().toISOString(),
+      _accepted_by: c.acceptedBy ?? null,
+      _signature_snapshot: (c.signatureSnapshot ?? {}) as unknown as Json,
+      _source: c.source ?? null,
       _ip: undefined,
       _user_agent: ua.slice(0, 1024),
       _device: device as unknown as Json,

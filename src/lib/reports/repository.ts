@@ -7,7 +7,6 @@
 // ============================================================================
 
 import { supabase } from "@/integrations/supabase/client";
-import { TATUADORES } from "@/lib/termo";
 import { onlyDigits, rowToCliente, type Cliente } from "@/lib/clientes";
 import { toAdminClient } from "@/lib/clientes-admin";
 import { tatuadorSlug } from "@/lib/contratos";
@@ -55,9 +54,12 @@ function iniciais(nome: string): string {
 }
 
 /** Mapa slug → nome canônico, incluindo os cadastrados + os vistos na operação. */
-function buildArtistIndex(extraNames: (string | null | undefined)[]): Map<string, string> {
+function buildArtistIndex(
+  officialNames: string[],
+  extraNames: (string | null | undefined)[],
+): Map<string, string> {
   const map = new Map<string, string>();
-  TATUADORES.forEach((n) => map.set(tatuadorSlug(n), n));
+  officialNames.forEach((n) => map.set(tatuadorSlug(n), n));
   extraNames.forEach((n) => {
     if (!n) return;
     const s = tatuadorSlug(n);
@@ -122,6 +124,19 @@ async function getAllConsents(): Promise<ConsentRow[]> {
   }));
 
   CONSENTS_CACHE = { at: Date.now(), data: list };
+  return list;
+}
+
+let ARTISTS_CACHE: { at: number; data: string[] } | null = null;
+async function getAllArtistNames(): Promise<string[]> {
+  if (ARTISTS_CACHE && Date.now() - ARTISTS_CACHE.at < 5000) return ARTISTS_CACHE.data;
+  const { data, error } = await supabase
+    .from("tattoo_artists")
+    .select("nome")
+    .order("nome", { ascending: true });
+  if (error) throw error;
+  const list = (data ?? []).map((row) => row.nome?.trim() ?? "").filter(Boolean);
+  ARTISTS_CACHE = { at: Date.now(), data: list };
   return list;
 }
 
@@ -231,13 +246,14 @@ function deriveAttendances(
 
 export async function getOverview(_period: ReportPeriod): Promise<ReportOverview> {
   try {
-    const [clientes, checkins, consents] = await Promise.all([
+    const [clientes, checkins, consents, artistNames] = await Promise.all([
       getAllClientes(),
       getAllCheckIns(),
       getAllConsents(),
+      getAllArtistNames(),
     ]);
 
-    const artistIndex = buildArtistIndex([
+    const artistIndex = buildArtistIndex(artistNames, [
       ...clientes.map((c) => c.dadosCadastrais?.tatuador),
       ...checkins.map((c) => c.tatuador),
     ]);
@@ -310,6 +326,7 @@ export async function getOverview(_period: ReportPeriod): Promise<ReportOverview
       },
     };
   } catch {
+    const fallbackArtistCount = ARTISTS_CACHE?.data.length ?? null;
     return {
       updatedAt: new Date().toISOString(),
       cards: {
@@ -317,8 +334,11 @@ export async function getOverview(_period: ReportPeriod): Promise<ReportOverview
         clientes: { key: "clientes", value: null, hint: "Sem dados disponíveis" },
         tatuadores: {
           key: "tatuadores",
-          value: TATUADORES.length,
-          hint: `${TATUADORES.length} profissionais cadastrados`,
+          value: fallbackArtistCount,
+          hint:
+            fallbackArtistCount === null
+              ? "Sem dados disponÃ­veis"
+              : `${fallbackArtistCount} profissionais cadastrados`,
         },
         contratos: { key: "contratos", value: null, hint: "Sem dados disponíveis" },
         fichas: { key: "fichas", value: null, hint: "Sem dados disponíveis" },
@@ -337,15 +357,16 @@ export async function getOverview(_period: ReportPeriod): Promise<ReportOverview
 export async function getTattooArtistPerformance(
   period: ReportPeriod,
 ): Promise<TattooArtistPerformance[]> {
-  const [clientes, checkins, consents] = await Promise.all([
+  const [clientes, checkins, consents, artistNames] = await Promise.all([
     getAllClientes(),
     getAllCheckIns(),
     getAllConsents(),
+    getAllArtistNames(),
   ]);
   const r = resolvePeriod(period);
   const today = todayISO();
 
-  const artistIndex = buildArtistIndex([
+  const artistIndex = buildArtistIndex(artistNames, [
     ...clientes.map((c) => c.dadosCadastrais?.tatuador),
     ...checkins.map((c) => c.tatuador),
   ]);
@@ -1050,6 +1071,7 @@ export function invalidateReportsCache(): void {
   CLIENTES_CACHE = null;
   CHECKINS_CACHE = null;
   CONSENTS_CACHE = null;
+  ARTISTS_CACHE = null;
 }
 
 export const reportsRepository = {

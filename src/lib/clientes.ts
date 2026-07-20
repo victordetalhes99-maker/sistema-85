@@ -329,7 +329,7 @@ export async function getCliente(cpf: string): Promise<ClientePublico | null> {
   };
 }
 
-export async function saveCliente(c: Cliente): Promise<void> {
+export async function saveCliente(c: Cliente): Promise<Cliente> {
   const cpfD = onlyDigits(c.cpf);
   // Sobe assinatura principal pro storage (se for dataURL)
   const assinaturaPath = await uploadAssinaturaIfNeeded(cpfD, c.assinatura);
@@ -346,13 +346,18 @@ export async function saveCliente(c: Cliente): Promise<void> {
     logSecure("warn", "saveCliente falhou", { code: error.code, status: payload.status });
     throw error;
   }
+  return {
+    ...c,
+    assinatura: assinaturaPath,
+    sessoes: sessoesComPath,
+  };
 }
 
 export async function addSessao(
   cpf: string,
   sessao: Sessao,
   anamneseAtualizada?: Anamnese,
-): Promise<void> {
+): Promise<Sessao> {
   const cpfD = onlyDigits(cpf);
   const assinaturaPath = await uploadAssinaturaIfNeeded(cpfD, sessao.assinatura);
   const sessaoFinal: Sessao = { ...sessao, assinatura: assinaturaPath };
@@ -367,4 +372,5 @@ export async function addSessao(
     logSecure("warn", "addSessao falhou", { code: error.code });
     throw error;
   }
+  return sessaoFinal;
 }

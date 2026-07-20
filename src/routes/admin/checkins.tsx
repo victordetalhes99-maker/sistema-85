@@ -42,7 +42,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
-import { TATUADORES } from "@/lib/termo";
 import {
   DEFAULT_CHECKIN_FILTERS,
   type CheckIn,
@@ -65,6 +64,7 @@ import {
 } from "@/lib/checkins";
 import { exportCheckInsPdf, exportCheckInsXlsx } from "@/lib/checkins/export";
 import { getErrorMessage } from "@/lib/errors";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 import { NewCheckInDialog } from "@/components/admin/checkins/NewCheckInDialog";
 
@@ -98,6 +98,7 @@ function statusBadge(status: CheckIn["status"]) {
 }
 
 export default function AdminCheckinsPage() {
+  const tattooArtists = useActiveTattooArtistNames();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useCheckInsList();
   const [filters, setFilters] = useState<CheckInFilters>(DEFAULT_CHECKIN_FILTERS);
@@ -476,7 +477,7 @@ export default function AdminCheckinsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os tatuadores</SelectItem>
-                {TATUADORES.map((t) => (
+                {tattooArtists.map((t) => (
                   <SelectItem key={t} value={t}>
                     {t}
                   </SelectItem>

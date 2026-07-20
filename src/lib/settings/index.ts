@@ -1,30 +1,15 @@
-// ============================================================================
-// Fonte única de configurações do estúdio.
-//
-// Persistência real na tabela public.app_config (RLS admin-only). Quando o
-// usuário não é admin ou está sem sessão, o hook expõe estado somente-leitura
-// com fallback de defaults — nunca finge que salvou.
-//
-// Escopo desta etapa: dados do estúdio (Geral). Segurança, integrações e
-// operação continuam com módulos próprios; este arquivo é o alicerce comum.
-// ============================================================================
-
 import { useCallback, useEffect, useState } from "react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
-
-// ----------------------------------------------------------------------------
-// Schema
-// ----------------------------------------------------------------------------
 
 export const studioSchema = z.object({
   nomeEstudio: z
     .string()
     .trim()
-    .min(2, "Nome do estúdio é obrigatório (mín. 2 caracteres)")
-    .max(120, "Máximo de 120 caracteres"),
-  nomeEmpresarial: z.string().trim().max(160, "Máximo de 160 caracteres").default(""),
-  documento: z.string().trim().max(32, "Máximo de 32 caracteres").default(""),
+    .min(2, "Nome do estudio e obrigatorio (min. 2 caracteres)")
+    .max(120, "Maximo de 120 caracteres"),
+  nomeEmpresarial: z.string().trim().max(160, "Maximo de 160 caracteres").default(""),
+  documento: z.string().trim().max(32, "Maximo de 32 caracteres").default(""),
   telefone: z.string().trim().max(32).default(""),
   whatsapp: z.string().trim().max(32).default(""),
   email: z
@@ -32,13 +17,13 @@ export const studioSchema = z.object({
     .trim()
     .max(254)
     .default("")
-    .refine((v) => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), "E-mail inválido"),
+    .refine((v) => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), "E-mail invalido"),
   site: z
     .string()
     .trim()
     .max(254)
     .default("")
-    .refine((v) => v === "" || /^https?:\/\/.+/i.test(v), "URL deve começar com http(s)://"),
+    .refine((v) => v === "" || /^https?:\/\/.+/i.test(v), "URL deve comecar com http(s)://"),
   endereco: z.string().trim().max(200).default(""),
   cidade: z.string().trim().max(80).default(""),
   estado: z.string().trim().max(40).default(""),
@@ -47,7 +32,7 @@ export const studioSchema = z.object({
     .trim()
     .max(9)
     .default("")
-    .refine((v) => v === "" || /^\d{5}-?\d{3}$/.test(v), "CEP inválido"),
+    .refine((v) => v === "" || /^\d{5}-?\d{3}$/.test(v), "CEP invalido"),
   timezone: z.string().trim().min(1).max(60).default("America/Fortaleza"),
   horario: z.string().trim().max(200).default(""),
   descricao: z.string().trim().max(500).default(""),
@@ -71,12 +56,7 @@ export const DEFAULT_STUDIO: StudioSettings = studioSchema.parse({
   productionChecklistCompleted: false,
 });
 
-// ----------------------------------------------------------------------------
-// Repository (app_config: key/value/atualizado_em)
-// ----------------------------------------------------------------------------
-
 const KEY_STUDIO = "studio.v1";
-const LOCAL_KEY = "ink_studio_admin_settings_v2";
 
 export interface StudioSnapshot {
   data: StudioSettings;
@@ -85,18 +65,19 @@ export interface StudioSnapshot {
 }
 
 export async function fetchStudioSettings(): Promise<StudioSnapshot> {
-  // 1) tenta banco
   try {
     const { data, error } = await supabase
       .from("app_config")
       .select("value, atualizado_em")
       .eq("key", KEY_STUDIO)
       .maybeSingle();
+
     if (!error && data?.value) {
       const parsed = studioSchema.safeParse({
         ...DEFAULT_STUDIO,
         ...JSON.parse(data.value as string),
       });
+
       if (parsed.success) {
         return {
           data: parsed.data,
@@ -106,20 +87,9 @@ export async function fetchStudioSettings(): Promise<StudioSnapshot> {
       }
     }
   } catch {
-    /* segue para fallback */
+    // Mantem fallback apenas em memoria/defaults.
   }
-  // 2) fallback local
-  try {
-    const raw = localStorage.getItem(LOCAL_KEY);
-    if (raw) {
-      const parsed = studioSchema.safeParse({ ...DEFAULT_STUDIO, ...JSON.parse(raw) });
-      if (parsed.success) {
-        return { data: parsed.data, updatedAt: null, persistedInDb: false };
-      }
-    }
-  } catch {
-    /* noop */
-  }
+
   return { data: DEFAULT_STUDIO, updatedAt: null, persistedInDb: false };
 }
 
@@ -130,40 +100,24 @@ export async function saveStudioSettings(
 > {
   const parsed = studioSchema.safeParse(next);
   if (!parsed.success) {
-    return { ok: false, error: parsed.error.issues[0]?.message ?? "Valores inválidos" };
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Valores invalidos" };
   }
-  const payload = JSON.stringify(parsed.data);
 
-  // 1) upsert real
   try {
     const { data, error } = await supabase
       .from("app_config")
-      .upsert({ key: KEY_STUDIO, value: payload }, { onConflict: "key" })
+      .upsert({ key: KEY_STUDIO, value: JSON.stringify(parsed.data) }, { onConflict: "key" })
       .select("atualizado_em")
       .maybeSingle();
-    if (!error) {
-      // opcional: sincroniza fallback local
-      try {
-        localStorage.setItem(LOCAL_KEY, payload);
-      } catch {
-        /* noop */
-      }
-      return {
-        ok: true,
-        persistedInDb: true,
-        updatedAt: (data?.atualizado_em as string) ?? new Date().toISOString(),
-      };
+
+    if (error) {
+      return { ok: false, error: error.message || "Falha ao salvar no banco" };
     }
-    // Sem permissão / sem sessão: cai para fallback local
-    try {
-      localStorage.setItem(LOCAL_KEY, payload);
-    } catch {
-      /* noop */
-    }
+
     return {
       ok: true,
-      persistedInDb: false,
-      updatedAt: new Date().toISOString(),
+      persistedInDb: true,
+      updatedAt: (data?.atualizado_em as string) ?? new Date().toISOString(),
     };
   } catch (err) {
     return {
@@ -172,10 +126,6 @@ export async function saveStudioSettings(
     };
   }
 }
-
-// ----------------------------------------------------------------------------
-// Hook
-// ----------------------------------------------------------------------------
 
 export interface UseStudioSettings {
   data: StudioSettings;
@@ -216,14 +166,14 @@ export function useStudioSettings(): UseStudioSettings {
   }, [load]);
 
   const save = useCallback(async (next: StudioSettings) => {
-    const res = await saveStudioSettings(next);
-    if (res.ok) {
+    const result = await saveStudioSettings(next);
+    if (result.ok) {
       setData(next);
-      setUpdatedAt(res.updatedAt);
-      setPersistedInDb(res.persistedInDb);
-      return { ok: true as const, persistedInDb: res.persistedInDb };
+      setUpdatedAt(result.updatedAt);
+      setPersistedInDb(result.persistedInDb);
+      return { ok: true as const, persistedInDb: result.persistedInDb };
     }
-    return { ok: false as const, error: res.error };
+    return { ok: false as const, error: result.error };
   }, []);
 
   return { data, updatedAt, persistedInDb, isLoading, error, refetch: load, save };

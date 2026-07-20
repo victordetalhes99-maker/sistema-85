@@ -42,7 +42,7 @@ import {
   type ContratoStatus,
 } from "@/lib/contratos";
 import { gerarContratoPdf } from "@/lib/contratos/export";
-import { getContractTemplate, sha256Hex } from "@/lib/contratos/templates";
+import { sha256Hex } from "@/lib/contratos/templates";
 
 export default function AdminContratoDetalhePage() {
   const params = useParams();
@@ -54,20 +54,27 @@ export default function AdminContratoDetalhePage() {
   const [hashCheck, setHashCheck] = useState<"loading" | "ok" | "diff" | "unknown">("loading");
   const [hashCalc, setHashCalc] = useState<string | null>(null);
 
-  // Texto do contrato reconstruído
   const texto = useMemo(() => {
     if (!data) return "";
-    const tpl = getContractTemplate(data.versao);
-    return tpl.build({ tatuador: data.tatuador ?? "—" });
+    return (
+      data.renderedText ??
+      `${data.legacyNotice ?? "Documento legado"}\n\nEste aceite foi preservado sem snapshot integral do texto. O painel não reconstrói retroativamente o conteúdo aceito com base na configuração atual.`
+    );
   }, [data]);
 
-  // Verifica integridade
   useEffect(() => {
     if (!data) return;
     let alive = true;
     setHashCheck("loading");
     (async () => {
       try {
+        if (!data.renderedText) {
+          if (alive) {
+            setHashCalc(null);
+            setHashCheck("unknown");
+          }
+          return;
+        }
         const h = await sha256Hex(texto);
         if (!alive) return;
         setHashCalc(h);
@@ -155,12 +162,10 @@ export default function AdminContratoDetalhePage() {
     );
   }
 
-  const tpl = getContractTemplate(data.versao);
-
   return (
     <div className="space-y-6" data-print-area>
       <PageHeader
-        title={tpl.nome}
+        title={data.documentLabel}
         description={`Contrato ${data.id}`}
         actions={
           <>
@@ -187,7 +192,7 @@ export default function AdminContratoDetalhePage() {
 
       {/* Cabeçalho de status */}
       <section className="grid gap-3 md:grid-cols-3">
-        <StatusCard status={data.status} versao={data.versao} vigencia={tpl.vigenciaInicio} />
+        <StatusCard status={data.status} versao={data.versao} />
         <SignatureStatusCard tem={data.temAssinatura} em={data.assinadoEm} />
         <IntegrityCard check={hashCheck} stored={data.textoHash} calculated={hashCalc} />
       </section>
@@ -228,12 +233,15 @@ export default function AdminContratoDetalhePage() {
           <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
             <FileSignature className="h-3.5 w-3.5" /> Contratado
           </div>
-          <div className="text-lg font-semibold text-foreground">85 TATTOO Studio</div>
+          <div className="text-lg font-semibold text-foreground">{data.studioDisplayName}</div>
           <dl className="mt-4 grid grid-cols-1 gap-2 text-sm">
             <Field label="Tatuador" value={data.tatuador ?? "—"} />
             <Field label="Origem" value={ORIGEM_LABEL[data.origem]} />
-            <Field label="Template" value={`${tpl.id} · ${data.versao}`} />
+            <Field label="Template" value={`${data.templateId} · ${data.versao}`} />
             <Field label="Aceito em" value={formatDateTimeBR(data.aceitoEm)} />
+            {data.studioCompanyName && (
+              <Field label="Razão social" value={data.studioCompanyName} />
+            )}
           </dl>
         </div>
       </section>
@@ -246,6 +254,11 @@ export default function AdminContratoDetalhePage() {
           </div>
           <Badge variant="outline">Versão {data.versao}</Badge>
         </div>
+        {!data.renderedText && (
+          <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+            {data.legacyNotice}
+          </div>
+        )}
         <pre className="max-h-[440px] overflow-auto whitespace-pre-wrap rounded-lg border border-border/40 bg-background/40 p-4 font-sans text-sm leading-relaxed text-foreground/90">
           {texto}
         </pre>
@@ -344,15 +357,7 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatusCard({
-  status,
-  versao,
-  vigencia,
-}: {
-  status: ContratoStatus;
-  versao: string;
-  vigencia: string;
-}) {
+function StatusCard({ status, versao }: { status: ContratoStatus; versao: string }) {
   const tones: Record<ContratoStatus, string> = {
     signed: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
     cancelled: "border-rose-500/40 bg-rose-500/10 text-rose-300",
@@ -365,9 +370,7 @@ function StatusCard({
         <CheckCircle2 className="h-3.5 w-3.5" /> Status
       </div>
       <div className="mt-2 text-lg font-semibold">{STATUS_LABEL[status]}</div>
-      <div className="mt-1 text-xs opacity-80">
-        Versão {versao} · vigência desde {vigencia}
-      </div>
+      <div className="mt-1 text-xs opacity-80">Versão {versao}</div>
     </div>
   );
 }

@@ -29,11 +29,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { TATUADORES } from "@/lib/termo";
 import { createCheckIn, useDebounced, todayISO, fetchCheckIns, type CheckIn } from "@/lib/checkins";
 import { useAdminClients, type AdminClient } from "@/lib/clientes-admin";
 import { onlyDigits } from "@/lib/clientes";
 import { getErrorMessage } from "@/lib/errors";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 interface Props {
   open: boolean;
@@ -51,6 +51,7 @@ export function NewCheckInDialog({ open, onClose, onCreated }: Props) {
   const [existingToday, setExistingToday] = useState<CheckIn[]>([]);
   const [checkingDup, setCheckingDup] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const tattooArtists = useActiveTattooArtistNames();
 
   useEffect(() => {
     if (!open) {
@@ -258,7 +259,7 @@ export function NewCheckInDialog({ open, onClose, onCreated }: Props) {
                   <SelectValue placeholder="Selecione…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {TATUADORES.map((t) => (
+                  {tattooArtists.map((t) => (
                     <SelectItem key={t} value={t}>
                       {t}
                     </SelectItem>

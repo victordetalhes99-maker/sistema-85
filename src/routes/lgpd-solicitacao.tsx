@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { buildPrivacyNotice } from "@/lib/lgpd";
 import { isValidCPF, maskCPF, onlyDigits } from "@/lib/clientes";
 import { rateLimit } from "@/lib/lgpd-consent";
-import { useStudioSettings } from "@/lib/settings";
+import { usePublicDocumentContext } from "@/lib/public-document-context";
 import { buildOperationId, logSecure } from "@/lib/logger";
 import Turnstile from "@/components/Turnstile";
 import { verifyTurnstileToken } from "@/lib/turnstile";
@@ -36,7 +36,11 @@ const TIPOS: { v: Tipo; label: string; desc: string }[] = [
 ];
 
 export default function LgpdSolicitacao() {
-  const { data: studio } = useStudioSettings();
+  const {
+    data: documentContext,
+    isLoading: documentContextLoading,
+    error: documentContextError,
+  } = usePublicDocumentContext();
   const [cpf, setCpf] = useState("");
   const [email, setEmail] = useState("");
   const [tipo, setTipo] = useState<Tipo>("export");
@@ -47,7 +51,17 @@ export default function LgpdSolicitacao() {
   const [tsToken, setTsToken] = useState<string | null>(null);
 
   const ok = isValidCPF(cpf) && email.includes("@") && motivo.trim().length >= 5 && !!tsToken;
-  const privacyNotice = useMemo(() => buildPrivacyNotice(studio.nomeEstudio), [studio.nomeEstudio]);
+  const privacyNotice = useMemo(() => {
+    if (documentContextLoading) return "Carregando aviso de privacidade...";
+    if (documentContextError) return documentContextError;
+    if (!documentContext.legalReady) {
+      if (documentContext.missingRequiredFields.length === 0) {
+        return "Configuração jurídica incompleta.";
+      }
+      return `Configuração jurídica incompleta. Preencha: ${documentContext.missingRequiredFields.join(", ")}.`;
+    }
+    return buildPrivacyNotice(documentContext.studio);
+  }, [documentContext, documentContextError, documentContextLoading]);
 
   const enviar = async () => {
     if (!ok || enviando) return;

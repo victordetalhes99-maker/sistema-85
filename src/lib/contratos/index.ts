@@ -1,32 +1,7 @@
-// ============================================================================
-// Fonte única do módulo de Contratos — 85 TATTOO
-// ----------------------------------------------------------------------------
-// Um "contrato" é derivado da tabela `consent_records` (tipo = 'termo') unida
-// à tabela `clientes` (dados) e ao array `clientes.sessoes` (assinatura +
-// tatuador da sessão). Nenhum outro arquivo deve montar contratos por conta
-// própria — todas as telas (listagem, detalhe, relatório, dashboard, ficha,
-// documentos, check-in) consomem os hooks/funções deste módulo.
-//
-// Modelo:
-//   • ID           = `consent_records.id`      (UUID estável)
-//   • Cliente      = vinculado pelo CPF real (identidade estável do projeto)
-//   • Tatuador     = do snapshot da sessão correspondente (fallback cadastro)
-//   • Ficha        = mesma sessão → id composto "<cpf>:v0" | "<cpf>:s<idx>"
-//   • Assinatura   = caminho no bucket privado `assinaturas`
-//   • Template     = ver `templates.ts` (versionado)
-//   • Aceite/hash  = `consent_records.texto_hash` (SHA-256 do texto exibido)
-//
-// Contratos são imutáveis por construção: `consent_records` não é editado.
-// ============================================================================
-
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { type Cliente, type Sessao, onlyDigits, rowToCliente } from "@/lib/clientes";
-import { CONTRACT_TEMPLATES, getContractTemplate } from "./templates";
-
-// ---------------------------------------------------------------------------
-// Tipos
-// ---------------------------------------------------------------------------
+import { CONTRACT_TEMPLATE_ID, CONTRACT_TEMPLATE_LABEL } from "./templates";
 
 export type ContratoStatus = "signed" | "cancelled" | "superseded" | "error";
 
@@ -35,7 +10,7 @@ export interface ContratoSnapshotCliente {
   cpfMasked: string;
   nomeCompleto: string;
   iniciais: string;
-  documento: string; // CPF formatado (uso interno; UI mostra sempre mascarado)
+  documento: string;
   dataNascimento?: string;
   telefone?: string;
   email?: string;
@@ -43,7 +18,7 @@ export interface ContratoSnapshotCliente {
 }
 
 export interface ContratoSnapshotTatuador {
-  id: string; // slug estável derivado do nome (mesma origem dos relatórios)
+  id: string;
   displayName: string;
 }
 
@@ -58,26 +33,44 @@ export interface ContratoResumo {
   templateId: string;
   versao: string;
   status: ContratoStatus;
-  aceitoEm: string; // ISO — igual a signedAt no fluxo atual
-  assinadoEm: string | null; // ISO
+  aceitoEm: string;
+  assinadoEm: string | null;
   temAssinatura: boolean;
-  temPdf: boolean; // gerável on-demand quando há assinatura
+  temPdf: boolean;
   fichaId: string | null;
   origem: "primeira_visita" | "recorrente";
   atualizadoEm: string;
+  hasSnapshot: boolean;
+  legacyNotice: string | null;
+  studioDisplayName: string;
+  documentLabel: string;
+  filePrefix: string;
 }
 
 export interface ContratoDetalhe extends ContratoResumo {
   cliente: ContratoSnapshotCliente;
   tatuadorSnapshot: ContratoSnapshotTatuador | null;
   assinaturaPath: string | null;
-  textoHash: string | null; // hash SHA-256 do texto aceito (do consent_records)
+  textoHash: string | null;
+  templateHash: string | null;
   hashAlgoritmo: "SHA-256";
+  renderedText: string | null;
+  renderedHtml: string | null;
+  studioCompanyName: string | null;
+  pdfHeader: string | null;
+  pdfFooter: string | null;
+  configSnapshot: Record<string, unknown> | null;
+  clientSnapshotRaw: Record<string, unknown> | null;
+  artistSnapshotRaw: Record<string, unknown> | null;
+  signatureSnapshot: Record<string, unknown> | null;
   aceite: {
     userAgent: string | null;
     ip: string | null;
     device: Record<string, unknown> | null;
     versao: string;
+    acceptedAt: string;
+    acceptedBy: string | null;
+    source: string | null;
   };
   historico: ContratoEvento[];
   outrosContratos: Array<Pick<ContratoResumo, "id" | "versao" | "aceitoEm" | "status">>;
@@ -89,7 +82,8 @@ export type ContratoEventoTipo =
   | "terms_accepted"
   | "signature_registered"
   | "signed"
-  | "pdf_generated";
+  | "pdf_generated"
+  | "legacy_detected";
 
 export interface ContratoEvento {
   tipo: ContratoEventoTipo;
@@ -97,9 +91,47 @@ export interface ContratoEvento {
   detalhes?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+interface ConsentRow {
+  id: string;
+  cpf: string;
+  tipo: "lgpd" | "termo" | "anamnese" | string;
+  versao: string;
+  texto_hash: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  device: Record<string, unknown> | null;
+  criado_em: string;
+  source?: string | null;
+  document_type?: string | null;
+  template_version?: string | null;
+  template_hash?: string | null;
+  rendered_text?: string | null;
+  rendered_html?: string | null;
+  config_snapshot?: Record<string, unknown> | null;
+  client_snapshot?: Record<string, unknown> | null;
+  artist_snapshot?: Record<string, unknown> | null;
+  accepted_at?: string | null;
+  accepted_by?: string | null;
+  signature_snapshot?: Record<string, unknown> | null;
+}
+
+interface MatchedSession {
+  fichaId: string;
+  origem: "primeira_visita" | "recorrente";
+  tatuador: string | null;
+  assinaturaPath: string | null;
+}
+
+const LEGACY_NOTICE = "Documento legado sem snapshot integral";
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
 
 function iniciais(nome: string): string {
   const p = (nome || "").trim().split(/\s+/).filter(Boolean);
@@ -157,32 +189,28 @@ export function tatuadorSlug(nome: string): string {
     .replace(/(^-|-$)/g, "");
 }
 
-// ---------------------------------------------------------------------------
-// Row do consent_records
-// ---------------------------------------------------------------------------
-
-interface ConsentRow {
-  id: string;
-  cpf: string;
-  tipo: "lgpd" | "termo" | "anamnese" | string;
-  versao: string;
-  texto_hash: string;
-  ip: string | null;
-  user_agent: string | null;
-  device: Record<string, unknown> | null;
-  criado_em: string;
+function extractSnapshotBundle(configSnapshot: Record<string, unknown> | null) {
+  return {
+    documents: asRecord(configSnapshot?.documents),
+    identity: asRecord(configSnapshot?.identity),
+    studio: asRecord(configSnapshot?.studio),
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Emparelhamento consent ↔ sessão do cliente
-// ---------------------------------------------------------------------------
+function resolveAcceptedAt(row: ConsentRow) {
+  return row.accepted_at ?? row.criado_em;
+}
 
-interface MatchedSession {
-  fichaId: string;
-  origem: "primeira_visita" | "recorrente";
-  tatuador: string | null;
-  assinaturaPath: string | null;
-  data: string;
+function resolveVersion(row: ConsentRow) {
+  return row.template_version?.trim() || row.versao?.trim() || "legacy";
+}
+
+function resolveSnapshotFlag(row: ConsentRow) {
+  return Boolean(asString(row.rendered_text));
+}
+
+function resolveLegacyNotice(row: ConsentRow) {
+  return resolveSnapshotFlag(row) ? null : LEGACY_NOTICE;
 }
 
 function matchSessao(cliente: Cliente, consentIso: string): MatchedSession {
@@ -190,7 +218,6 @@ function matchSessao(cliente: Cliente, consentIso: string): MatchedSession {
   const sessoes: Sessao[] = cliente.sessoes || [];
   const consentTs = new Date(consentIso).getTime();
 
-  // Melhor sessão = menor distância temporal
   let bestIdx = -1;
   let bestDist = Infinity;
   sessoes.forEach((s, idx) => {
@@ -203,19 +230,15 @@ function matchSessao(cliente: Cliente, consentIso: string): MatchedSession {
     }
   });
 
-  // Emparelhar apenas quando a diferença for < 24h — caso contrário caímos
-  // no snapshot da primeira visita (cadastro base do cliente).
   const withinDay = bestIdx >= 0 && bestDist <= 24 * 3600 * 1000;
   if (withinDay) {
     const s = sessoes[bestIdx];
-    // Primeira sessão registrada é a "primeira visita" (v0); demais são recorrentes.
     if (bestIdx === 0) {
       return {
         fichaId: `${cpf}:v0`,
         origem: "primeira_visita",
         tatuador: s.tatuador || cliente.dadosCadastrais?.tatuador || null,
         assinaturaPath: s.assinatura || cliente.assinatura || null,
-        data: s.data || cliente.criadoEm,
       };
     }
     return {
@@ -223,7 +246,6 @@ function matchSessao(cliente: Cliente, consentIso: string): MatchedSession {
       origem: "recorrente",
       tatuador: s.tatuador || cliente.dadosCadastrais?.tatuador || null,
       assinaturaPath: s.assinatura || null,
-      data: s.data || cliente.atualizadoEm,
     };
   }
 
@@ -232,13 +254,121 @@ function matchSessao(cliente: Cliente, consentIso: string): MatchedSession {
     origem: "primeira_visita",
     tatuador: cliente.dadosCadastrais?.tatuador || null,
     assinaturaPath: cliente.assinatura || null,
-    data: cliente.criadoEm,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Repositório
-// ---------------------------------------------------------------------------
+function resolveSourceOrigem(
+  row: ConsentRow,
+  fallback: "primeira_visita" | "recorrente",
+): "primeira_visita" | "recorrente" {
+  const source = row.source?.toLowerCase() ?? "";
+  if (source.includes("recorrente")) return "recorrente";
+  if (source.includes("cadastro")) return "primeira_visita";
+  return fallback;
+}
+
+function resolveClientSnapshot(
+  row: ConsentRow,
+  cliente: Cliente | undefined,
+): { data: ContratoSnapshotCliente; raw: Record<string, unknown> | null } {
+  const raw = asRecord(row.client_snapshot);
+  const cpf = onlyDigits(asString(raw?.cpf) ?? row.cpf);
+  const nome =
+    asString(raw?.nomeCompleto) ?? cliente?.dadosCadastrais?.nomeCompleto ?? "Titular removido";
+
+  return {
+    raw,
+    data: {
+      cpf,
+      cpfMasked: maskCpfSafe(cpf),
+      nomeCompleto: nome,
+      iniciais: iniciais(nome),
+      documento: formatCpfFull(cpf),
+      dataNascimento: asString(raw?.dataNascimento) ?? cliente?.dadosCadastrais?.dataNascimento,
+      telefone: asString(raw?.telefone) ?? cliente?.dadosCadastrais?.telefone,
+      email: asString(raw?.email) ?? cliente?.dadosCadastrais?.email,
+      endereco: asString(raw?.endereco) ?? cliente?.dadosCadastrais?.endereco,
+    },
+  };
+}
+
+function resolveArtistSnapshot(
+  row: ConsentRow,
+  fallbackName: string | null,
+): { data: ContratoSnapshotTatuador | null; raw: Record<string, unknown> | null } {
+  const raw = asRecord(row.artist_snapshot);
+  const nome = asString(raw?.nome) ?? fallbackName;
+  if (!nome) return { data: null, raw };
+  return {
+    raw,
+    data: {
+      id: asString(raw?.id) ?? tatuadorSlug(nome),
+      displayName: nome,
+    },
+  };
+}
+
+function resolveAssinaturaPath(row: ConsentRow, fallback: string | null) {
+  const raw = asRecord(row.signature_snapshot);
+  return {
+    raw,
+    path: asString(raw?.storagePath) ?? asString(raw?.path) ?? fallback,
+  };
+}
+
+function resolveStudioFields(row: ConsentRow) {
+  const configSnapshot = asRecord(row.config_snapshot);
+  const { documents, identity, studio } = extractSnapshotBundle(configSnapshot);
+  return {
+    configSnapshot,
+    studioDisplayName:
+      asString(studio?.nomeEstudio) ??
+      asString(identity?.systemName) ??
+      asString(identity?.pdfHeader) ??
+      asString(studio?.nomeEmpresarial) ??
+      "Documento contratual",
+    studioCompanyName: asString(studio?.nomeEmpresarial),
+    pdfHeader: asString(identity?.pdfHeader) ?? asString(documents?.pdfHeader),
+    pdfFooter: asString(identity?.pdfFooter) ?? asString(documents?.pdfFooter),
+    filePrefix: asString(documents?.filePrefix) ?? "documento",
+  };
+}
+
+function buildResumo(row: ConsentRow, cliente: Cliente | undefined): ContratoResumo {
+  const cpf = onlyDigits(row.cpf);
+  const acceptedAt = resolveAcceptedAt(row);
+  const matched = cliente ? matchSessao(cliente, acceptedAt) : null;
+  const clientSnapshot = resolveClientSnapshot(row, cliente);
+  const artistSnapshot = resolveArtistSnapshot(row, matched?.tatuador ?? null);
+  const assinatura = resolveAssinaturaPath(row, matched?.assinaturaPath ?? null);
+  const studio = resolveStudioFields(row);
+  const hasSnapshot = resolveSnapshotFlag(row);
+
+  return {
+    id: row.id,
+    cpf,
+    cpfMasked: clientSnapshot.data.cpfMasked,
+    clienteNome: clientSnapshot.data.nomeCompleto,
+    clienteIniciais: clientSnapshot.data.iniciais,
+    tatuador: artistSnapshot.data?.displayName ?? null,
+    tatuadorId: artistSnapshot.data?.id ?? null,
+    templateId: row.document_type?.trim() || CONTRACT_TEMPLATE_ID,
+    versao: resolveVersion(row),
+    status: "signed",
+    aceitoEm: acceptedAt,
+    assinadoEm: assinatura.path ? acceptedAt : null,
+    temAssinatura: Boolean(assinatura.path),
+    temPdf: true,
+    fichaId: matched?.fichaId ?? null,
+    origem: resolveSourceOrigem(row, matched?.origem ?? "primeira_visita"),
+    atualizadoEm: acceptedAt,
+    hasSnapshot,
+    legacyNotice: resolveLegacyNotice(row),
+    studioDisplayName: studio.studioDisplayName,
+    documentLabel: CONTRACT_TEMPLATE_LABEL,
+    filePrefix: studio.filePrefix,
+  };
+}
 
 async function fetchConsentTermos(): Promise<ConsentRow[]> {
   const { data, error } = await supabase
@@ -283,62 +413,6 @@ async function fetchConsentTermosByCpf(cpf: string): Promise<ConsentRow[]> {
   return (data ?? []) as ConsentRow[];
 }
 
-// ---------------------------------------------------------------------------
-// Montagem do contrato
-// ---------------------------------------------------------------------------
-
-function buildResumo(row: ConsentRow, cliente: Cliente | undefined): ContratoResumo {
-  const cpf = onlyDigits(row.cpf);
-  const nome = cliente?.dadosCadastrais?.nomeCompleto || "";
-  if (!cliente) {
-    // Contrato órfão: consent existe mas cliente foi anonimizado/excluído.
-    return {
-      id: row.id,
-      cpf,
-      cpfMasked: maskCpfSafe(cpf),
-      clienteNome: "Titular removido",
-      clienteIniciais: "—",
-      tatuador: null,
-      tatuadorId: null,
-      templateId: getContractTemplate(row.versao).id,
-      versao: row.versao,
-      status: "signed",
-      aceitoEm: row.criado_em,
-      assinadoEm: row.criado_em,
-      temAssinatura: false,
-      temPdf: false,
-      fichaId: null,
-      origem: "primeira_visita",
-      atualizadoEm: row.criado_em,
-    };
-  }
-  const match = matchSessao(cliente, row.criado_em);
-  const temAssinatura = Boolean(match.assinaturaPath);
-  return {
-    id: row.id,
-    cpf,
-    cpfMasked: maskCpfSafe(cpf),
-    clienteNome: nome,
-    clienteIniciais: iniciais(nome),
-    tatuador: match.tatuador,
-    tatuadorId: match.tatuador ? tatuadorSlug(match.tatuador) : null,
-    templateId: getContractTemplate(row.versao).id,
-    versao: row.versao,
-    status: "signed",
-    aceitoEm: row.criado_em,
-    assinadoEm: temAssinatura ? row.criado_em : null,
-    temAssinatura,
-    temPdf: temAssinatura,
-    fichaId: match.fichaId,
-    origem: match.origem,
-    atualizadoEm: row.criado_em,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
-
 export interface AsyncList<T> {
   data: T[];
   isLoading: boolean;
@@ -366,9 +440,9 @@ export function useContratos(): AsyncList<ContratoResumo> {
           .map((r) => buildResumo(r, clientes.get(onlyDigits(r.cpf))))
           .sort((a, b) => (b.aceitoEm || "").localeCompare(a.aceitoEm || ""));
         setData(out);
-      } catch (e) {
+      } catch (err) {
         if (!alive) return;
-        setError(e as Error);
+        setError(err as Error);
         setData([]);
       } finally {
         if (alive) setLoading(false);
@@ -379,7 +453,7 @@ export function useContratos(): AsyncList<ContratoResumo> {
     };
   }, [tick]);
 
-  const refetch = useCallback(() => setTick((t) => t + 1), []);
+  const refetch = useCallback(() => setTick((value) => value + 1), []);
   return {
     data,
     isLoading,
@@ -409,12 +483,13 @@ export function useContratoDetalhe(id: string | undefined): AsyncOne<ContratoDet
 
   useEffect(() => {
     let alive = true;
-    const refetch = () => setTick((t) => t + 1);
+    const refetch = () => setTick((value) => value + 1);
     if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
       setState({ data: null, isLoading: false, notFound: true, error: null, refetch });
       return;
     }
-    setState((s) => ({ ...s, isLoading: true, error: null }));
+
+    setState((current) => ({ ...current, isLoading: true, error: null }));
     (async () => {
       try {
         const { data: rowData, error: rowErr } = await supabase
@@ -424,80 +499,98 @@ export function useContratoDetalhe(id: string | undefined): AsyncOne<ContratoDet
           .maybeSingle();
         if (rowErr) throw rowErr;
         if (!rowData) {
-          if (alive)
+          if (alive) {
             setState({ data: null, isLoading: false, notFound: true, error: null, refetch });
+          }
           return;
         }
+
         const row = rowData as ConsentRow;
         if (row.tipo !== "termo") {
-          if (alive)
+          if (alive) {
             setState({ data: null, isLoading: false, notFound: true, error: null, refetch });
+          }
           return;
         }
 
         const cliente = await fetchClienteByCpf(row.cpf);
         const resumo = buildResumo(row, cliente ?? undefined);
-        const match = cliente ? matchSessao(cliente, row.criado_em) : null;
+        const acceptedAt = resolveAcceptedAt(row);
+        const matched = cliente ? matchSessao(cliente, acceptedAt) : null;
         const outros = cliente ? await fetchConsentTermosByCpf(row.cpf) : [];
-
-        const cli: ContratoSnapshotCliente = {
-          cpf: onlyDigits(row.cpf),
-          cpfMasked: maskCpfSafe(row.cpf),
-          nomeCompleto: cliente?.dadosCadastrais?.nomeCompleto || "Titular removido",
-          iniciais: iniciais(cliente?.dadosCadastrais?.nomeCompleto || ""),
-          documento: formatCpfFull(row.cpf),
-          dataNascimento: cliente?.dadosCadastrais?.dataNascimento,
-          telefone: cliente?.dadosCadastrais?.telefone,
-          email: cliente?.dadosCadastrais?.email,
-          endereco: cliente?.dadosCadastrais?.endereco,
-        };
-
-        const tatSnap: ContratoSnapshotTatuador | null = resumo.tatuador
-          ? { id: tatuadorSlug(resumo.tatuador), displayName: resumo.tatuador }
-          : null;
+        const clientSnapshot = resolveClientSnapshot(row, cliente ?? undefined);
+        const artistSnapshot = resolveArtistSnapshot(row, matched?.tatuador ?? null);
+        const assinatura = resolveAssinaturaPath(row, matched?.assinaturaPath ?? null);
+        const studio = resolveStudioFields(row);
 
         const historico: ContratoEvento[] = [
           { tipo: "created", em: row.criado_em },
-          { tipo: "reviewed", em: row.criado_em },
+          { tipo: "reviewed", em: acceptedAt },
           {
             tipo: "terms_accepted",
-            em: row.criado_em,
-            detalhes: `Versão ${row.versao} aceita`,
+            em: acceptedAt,
+            detalhes: `Versão ${resolveVersion(row)} aceita`,
           },
         ];
+
         if (resumo.temAssinatura) {
-          historico.push({ tipo: "signature_registered", em: row.criado_em });
-          historico.push({ tipo: "signed", em: row.criado_em });
+          historico.push({ tipo: "signature_registered", em: acceptedAt });
+          historico.push({ tipo: "signed", em: acceptedAt });
+        }
+        if (!resumo.hasSnapshot) {
+          historico.push({ tipo: "legacy_detected", em: acceptedAt, detalhes: LEGACY_NOTICE });
         }
 
         const detalhe: ContratoDetalhe = {
           ...resumo,
-          cliente: cli,
-          tatuadorSnapshot: tatSnap,
-          assinaturaPath: match?.assinaturaPath ?? null,
+          cliente: clientSnapshot.data,
+          tatuadorSnapshot: artistSnapshot.data,
+          assinaturaPath: assinatura.path,
           textoHash: row.texto_hash ?? null,
+          templateHash: row.template_hash ?? null,
           hashAlgoritmo: "SHA-256",
+          renderedText: asString(row.rendered_text),
+          renderedHtml: asString(row.rendered_html),
+          studioCompanyName: studio.studioCompanyName,
+          pdfHeader: studio.pdfHeader,
+          pdfFooter: studio.pdfFooter,
+          configSnapshot: studio.configSnapshot,
+          clientSnapshotRaw: clientSnapshot.raw,
+          artistSnapshotRaw: artistSnapshot.raw,
+          signatureSnapshot: assinatura.raw,
           aceite: {
             userAgent: row.user_agent,
             ip: row.ip,
-            device: row.device,
-            versao: row.versao,
+            device: asRecord(row.device),
+            versao: resolveVersion(row),
+            acceptedAt,
+            acceptedBy: row.accepted_by ?? null,
+            source: row.source ?? null,
           },
           historico,
           outrosContratos: outros
-            .filter((o) => o.id !== row.id)
-            .map((o) => ({
-              id: o.id,
-              versao: o.versao,
-              aceitoEm: o.criado_em,
+            .filter((other) => other.id !== row.id)
+            .map((other) => ({
+              id: other.id,
+              versao: resolveVersion(other),
+              aceitoEm: resolveAcceptedAt(other),
               status: "signed" as ContratoStatus,
             })),
         };
-        if (alive)
+
+        if (alive) {
           setState({ data: detalhe, isLoading: false, notFound: false, error: null, refetch });
-      } catch (e) {
-        if (alive)
-          setState({ data: null, isLoading: false, notFound: false, error: e as Error, refetch });
+        }
+      } catch (err) {
+        if (alive) {
+          setState({
+            data: null,
+            isLoading: false,
+            notFound: false,
+            error: err as Error,
+            refetch,
+          });
+        }
       }
     })();
     return () => {
@@ -507,10 +600,6 @@ export function useContratoDetalhe(id: string | undefined): AsyncOne<ContratoDet
 
   return state;
 }
-
-// ---------------------------------------------------------------------------
-// Filtros / busca
-// ---------------------------------------------------------------------------
 
 export interface ContratosFilters {
   q: string;
@@ -565,7 +654,8 @@ export function useContratosFiltrados(
           c.clienteNome.toLowerCase().includes(termRaw) ||
           (c.tatuador ?? "").toLowerCase().includes(termRaw) ||
           c.id.toLowerCase().includes(termRaw) ||
-          c.versao.toLowerCase().includes(termRaw);
+          c.versao.toLowerCase().includes(termRaw) ||
+          c.studioDisplayName.toLowerCase().includes(termRaw);
         const hitDigits = termDigits.length > 0 && c.cpf.includes(termDigits);
         if (!hitText && !hitDigits) return false;
       }
@@ -574,22 +664,14 @@ export function useContratosFiltrados(
   }, [data, filters]);
 }
 
-// ---------------------------------------------------------------------------
-// Debounce util
-// ---------------------------------------------------------------------------
-
 export function useDebounced<T>(value: T, ms = 250): T {
-  const [v, setV] = useState(value);
+  const [debounced, setDebounced] = useState(value);
   useEffect(() => {
-    const h = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(h);
+    const handle = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(handle);
   }, [value, ms]);
-  return v;
+  return debounced;
 }
-
-// ---------------------------------------------------------------------------
-// Rótulos
-// ---------------------------------------------------------------------------
 
 export const STATUS_LABEL: Record<ContratoStatus, string> = {
   signed: "Assinado",
@@ -610,6 +692,5 @@ export const EVENT_LABEL: Record<ContratoEventoTipo, string> = {
   signature_registered: "Assinatura registrada",
   signed: "Contrato concluído",
   pdf_generated: "PDF gerado",
+  legacy_detected: "Documento legado identificado",
 };
-
-export { CONTRACT_TEMPLATES };

@@ -1,91 +1,151 @@
-import { Info, ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 import { SettingsSection } from "@/components/admin/settings/SettingsSection";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/lib/auth/AuthProvider";
-
-function useMe() {
-  const { email, userId, isAdmin, authLoading, adminLoading } = useAuth();
-  return {
-    email,
-    userId,
-    isAdmin,
-    loading: authLoading || adminLoading,
-  };
-}
+import {
+  DEFAULT_ADMIN_PROFILE,
+  useAdminProfileSettings,
+  type AdminProfileSettings,
+} from "@/lib/settings/admin-config";
 
 export default function ConfigAdministradorPage() {
-  const me = useMe();
+  const auth = useAuth();
+  const { data, updatedAt, isLoading, error, save } = useAdminProfileSettings();
+  const [draft, setDraft] = useState<AdminProfileSettings | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const current: AdminProfileSettings = { ...DEFAULT_ADMIN_PROFILE, ...(draft ?? data) };
+  const dirty = JSON.stringify(current) !== JSON.stringify(data);
+
+  function update<K extends keyof AdminProfileSettings>(key: K, value: AdminProfileSettings[K]) {
+    const base: AdminProfileSettings = { ...DEFAULT_ADMIN_PROFILE, ...(draft ?? data) };
+    setDraft({ ...base, [key]: value } as AdminProfileSettings);
+  }
+
+  async function handleSave() {
+    if (!dirty || saving) return;
+    setSaving(true);
+    const result = await save(current);
+    setSaving(false);
+    if (result.ok) {
+      setDraft(null);
+      toast.success("Perfil administrativo persistido no banco.");
+      return;
+    }
+    toast.error(result.error);
+  }
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-300/90">
+          Falha ao carregar dados do administrador: {error}
+        </div>
+      )}
+
       <SettingsSection
-        title="Sua conta administrativa"
-        description="Perfil do administrador autenticado. Alterações de perfil e convites de outros administradores exigem backend administrativo dedicado (não incluído nesta fase)."
+        title="Conta administrativa"
+        description="Metadados administrativos persistidos em app_config, preservando o usuario autenticado do Supabase."
+        footer={
+          <>
+            <div className="mr-auto text-[11px] text-muted-foreground">
+              Ultima atualizacao: {updatedAt ? new Date(updatedAt).toLocaleString("pt-BR") : "-"}
+            </div>
+            <Button variant="ghost" disabled={!dirty || saving} onClick={() => setDraft(null)}>
+              Descartar
+            </Button>
+            <Button
+              className="btn-gold"
+              disabled={!dirty || saving || isLoading}
+              onClick={handleSave}
+            >
+              {saving ? "Salvando..." : "Salvar perfil"}
+            </Button>
+          </>
+        }
       >
-        {me.loading ? (
-          <p className="text-xs text-muted-foreground">Carregando sessão…</p>
-        ) : !me.userId ? (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300/90">
-            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <p>Sem sessão administrativa. Faça login para ver seus dados.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Info2 label="E-mail" value={me.email ?? "—"} />
-            <Info2 label="ID interno" value={me.userId} mono />
-            <Info2
-              label="Função"
-              value={me.isAdmin ? "Administrador" : "Sem privilégios administrativos"}
-              tone={me.isAdmin ? "success" : "warning"}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Info label="E-mail autenticado" value={auth.email ?? "Sem sessao"} />
+          <Info label="User ID" value={auth.userId ?? "-"} mono />
+          <Field label="Nome exibido">
+            <Input
+              value={current.displayName}
+              onChange={(e) => update("displayName", e.target.value)}
+              disabled={isLoading}
             />
-            <Info2 label="Fonte" value="Supabase Auth + public.has_role(user_id, 'admin')" />
-          </div>
-        )}
+          </Field>
+          <Field label="Cargo">
+            <Input
+              value={current.roleTitle}
+              onChange={(e) => update("roleTitle", e.target.value)}
+              disabled={isLoading}
+            />
+          </Field>
+          <Field label="E-mail de suporte">
+            <Input
+              type="email"
+              value={current.supportEmail}
+              onChange={(e) => update("supportEmail", e.target.value)}
+              disabled={isLoading}
+            />
+          </Field>
+          <Field label="Avatar no branding">
+            <Input
+              value={current.avatarPath}
+              onChange={(e) => update("avatarPath", e.target.value)}
+              disabled={isLoading}
+              placeholder="avatar-admin.png"
+            />
+          </Field>
+        </div>
+
+        <div className="mt-4">
+          <Label className="text-xs font-medium text-muted-foreground">Observacoes internas</Label>
+          <Textarea
+            className="mt-1.5"
+            rows={4}
+            value={current.notes}
+            onChange={(e) => update("notes", e.target.value)}
+            disabled={isLoading}
+          />
+        </div>
       </SettingsSection>
 
       <SettingsSection
-        title="Convidar / gerenciar administradores"
-        description="Adicionar, revogar ou alterar função de administradores exige backend administrativo protegido — ainda não disponível."
+        title="Restaurar padrao"
+        description="Recupera os metadados de apresentacao sem alterar o usuario admin do Auth."
       >
-        <div className="flex items-start gap-2 rounded-lg border border-border/50 bg-background/30 p-3 text-xs text-muted-foreground">
-          <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[color:var(--gold)]" />
-          <div>
-            <p>
-              <strong className="text-foreground">Aguardando backend.</strong> Convites e revogação
-              serão feitos via edge function protegida por <code>is_admin()</code>. Enquanto isso, a
-              inclusão de administradores ocorre pelo painel do banco (backend interno) — o sistema
-              nunca cria administradores fictícios aqui.
-            </p>
-          </div>
-        </div>
+        <Button
+          variant="outline"
+          disabled={saving || isLoading}
+          onClick={() => setDraft(DEFAULT_ADMIN_PROFILE)}
+        >
+          Aplicar valores padrao
+        </Button>
       </SettingsSection>
     </div>
   );
 }
 
-function Info2({
-  label,
-  value,
-  mono,
-  tone,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  tone?: "success" | "warning";
-}) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <Label className="text-xs font-medium text-muted-foreground">{label}</Label>
+      <div className="mt-1.5">{children}</div>
+    </div>
+  );
+}
+
+function Info({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="rounded-lg border border-border/50 bg-background/30 p-3">
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div
-        className={[
-          "mt-1 text-sm",
-          mono ? "font-mono text-xs" : "font-medium",
-          tone === "success"
-            ? "text-emerald-300"
-            : tone === "warning"
-              ? "text-amber-300"
-              : "text-foreground",
-        ].join(" ")}
+        className={mono ? "mt-1 font-mono text-xs text-foreground" : "mt-1 text-sm text-foreground"}
       >
         {value}
       </div>

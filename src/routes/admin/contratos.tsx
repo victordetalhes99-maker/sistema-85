@@ -28,9 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { TATUADORES } from "@/lib/termo";
 import {
-  CONTRACT_TEMPLATES,
   DEFAULT_CONTRATOS_FILTERS,
   formatDateTimeBR,
   ORIGEM_LABEL,
@@ -42,8 +40,10 @@ import {
   type ContratosFilters,
 } from "@/lib/contratos";
 import { exportContratosPdf, exportContratosXlsx } from "@/lib/contratos/export";
+import { useActiveTattooArtistNames } from "@/lib/tattoo-artists";
 
 export default function AdminContratosPage() {
+  const tattooArtists = useActiveTattooArtistNames();
   const navigate = useNavigate();
   const { data, isLoading, error, refetch } = useContratos();
   const [filters, setFilters] = useState<ContratosFilters>(DEFAULT_CONTRATOS_FILTERS);
@@ -52,6 +52,10 @@ export default function AdminContratosPage() {
 
   const debouncedQ = useDebounced(filters.q, 200);
   const filtered = useContratosFiltrados(data, { ...filters, q: debouncedQ });
+  const versions = useMemo(
+    () => Array.from(new Set(data.map((item) => item.versao))).sort((a, b) => b.localeCompare(a)),
+    [data],
+  );
 
   const metrics = useMemo(() => {
     const total = data.length;
@@ -226,7 +230,7 @@ export default function AdminContratosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os tatuadores</SelectItem>
-                {TATUADORES.map((t) => (
+                {tattooArtists.map((t) => (
                   <SelectItem key={t} value={t}>
                     {t}
                   </SelectItem>
@@ -260,9 +264,9 @@ export default function AdminContratosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas as versões</SelectItem>
-                {CONTRACT_TEMPLATES.map((t) => (
-                  <SelectItem key={t.versao} value={t.versao}>
-                    {t.versao}
+                {versions.map((version) => (
+                  <SelectItem key={version} value={version}>
+                    {version}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -371,7 +375,14 @@ export default function AdminContratosPage() {
                         {ORIGEM_LABEL[c.origem]}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-foreground/80">{c.versao}</td>
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <div className="text-foreground/80">{c.versao}</div>
+                        {!c.hasSnapshot && (
+                          <div className="text-[11px] text-amber-300">{c.legacyNotice}</div>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3">
                       <StatusPill status={c.status} />
                     </td>
@@ -421,6 +432,7 @@ export default function AdminContratosPage() {
                     {ORIGEM_LABEL[c.origem]}
                   </Badge>
                   <span>Versão {c.versao}</span>
+                  {!c.hasSnapshot && <span className="text-amber-300">Documento legado</span>}
                   {c.temAssinatura && (
                     <span className="flex items-center gap-1">
                       <FileSignature className="h-3 w-3" /> Assinado

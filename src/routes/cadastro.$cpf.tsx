@@ -13,14 +13,16 @@ import {
 import { AnamneseForm, emptyAnamnese } from "@/components/AnamneseForm";
 import { BirthDatePicker } from "@/components/BirthDatePicker";
 import { SignaturePad } from "@/components/SignaturePad";
-import { buildAnamneseAvisos, buildTermoTexto } from "@/lib/termo";
 import { TatuadorSelect } from "@/components/TatuadorSelect";
 import {
-  CONSENT_TEXT_VERSION,
-  IMAGE_CONSENT_PURPOSES,
-  IMAGE_CONSENT_TEXT,
-  LGPD_REQUIRED_TEXT,
-} from "@/lib/lgpd";
+  buildAnamneseText,
+  buildConsentSnapshotPayload,
+  buildContractText,
+  buildLgpdText,
+  DocumentConfigError,
+} from "@/lib/document-templates";
+import { createRenderContext, usePublicDocumentContext } from "@/lib/public-document-context";
+import { IMAGE_CONSENT_PURPOSES, IMAGE_CONSENT_TEXT } from "@/lib/lgpd";
 import { rateLimit, registrarConsentimento } from "@/lib/lgpd-consent";
 import { toErrorLike } from "@/lib/errors";
 import { logSecure } from "@/lib/logger";
@@ -40,6 +42,9 @@ export default function CadastroPage() {
   const navigate = useNavigate();
   const cpf = (typeof window !== "undefined" && sessionStorage.getItem("checkin_cpf")) || "";
   const [step, setStep] = useState(0);
+  const [acceptanceId] = useState(
+    () => globalThis.crypto?.randomUUID?.() ?? `consent-${Date.now().toString(36)}`,
+  );
 
   useEffect(() => {
     document.title = "Primeiro cadastro - 85 TATTOO";
@@ -73,6 +78,12 @@ export default function CadastroPage() {
   const [tatuadorErro, setTatuadorErro] = useState<string | null>(null);
   const tatuadorFinal = tatuadorSelecionado.trim();
 
+  const {
+    data: documentContext,
+    isLoading: documentContextLoading,
+    error: documentContextError,
+  } = usePublicDocumentContext();
+
   const idade = useMemo(
     () => calculateAgeFromBirthDate(dados.dataNascimento),
     [dados.dataNascimento],
@@ -102,18 +113,91 @@ export default function CadastroPage() {
     granted: imageConsent[purpose],
   }));
 
+  const previewContext = useMemo(
+    () =>
+      createRenderContext(documentContext, {
+        acceptedAt: new Date().toISOString(),
+        acceptanceId,
+        source: isMinor ? "cadastro_menor" : "cadastro_padrao",
+        client: {
+          cpf,
+          nomeCompleto: dados.nomeCompleto || "Titular em cadastro",
+          email: dados.email,
+          endereco: dados.endereco,
+          telefone: dados.telefone,
+        },
+        artist: tatuadorFinal ? { nome: tatuadorFinal } : null,
+      }),
+    [
+      acceptanceId,
+      cpf,
+      dados.email,
+      dados.endereco,
+      dados.nomeCompleto,
+      dados.telefone,
+      documentContext,
+      isMinor,
+      tatuadorFinal,
+    ],
+  );
+
+  const legalBlockingMessage =
+    documentContext.missingRequiredFields.length > 0
+      ? `Configuracao juridica incompleta: ${documentContext.missingRequiredFields.join(", ")}.`
+      : documentContextError;
+
+  const anamnesePreview = useMemo(() => {
+    if (documentContextLoading) return "Carregando declaracao de riscos...";
+    if (!documentContext.legalReady) {
+      return legalBlockingMessage ?? "Configuracao juridica incompleta.";
+    }
+    try {
+      return buildAnamneseText(previewContext);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Falha ao montar a declaracao.";
+    }
+  }, [documentContext.legalReady, documentContextLoading, legalBlockingMessage, previewContext]);
+
+  const termoPreview = useMemo(() => {
+    if (documentContextLoading) return "Carregando termo atual...";
+    if (!documentContext.legalReady) {
+      return legalBlockingMessage ?? "Configuracao juridica incompleta.";
+    }
+    try {
+      return buildContractText(previewContext);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Falha ao montar o termo.";
+    }
+  }, [documentContext.legalReady, documentContextLoading, legalBlockingMessage, previewContext]);
+
+  const lgpdPreview = useMemo(() => {
+    if (documentContextLoading) return "Carregando aviso LGPD...";
+    if (!documentContext.legalReady) {
+      return legalBlockingMessage ?? "Configuracao juridica incompleta.";
+    }
+    try {
+      return buildLgpdText(previewContext);
+    } catch (error) {
+      return error instanceof Error ? error.message : "Falha ao montar o aviso LGPD.";
+    }
+  }, [documentContext.legalReady, documentContextLoading, legalBlockingMessage, previewContext]);
+
   const finalizar = async () => {
     if (!assinatura || !aceitoTermo || !aceitoLgpd || !tatuadorFinal || enviando) return;
     setEnviando(true);
     setErroEnvio(null);
     try {
+      if (!documentContext.legalReady) {
+        throw new DocumentConfigError(documentContext.missingRequiredFields);
+      }
       const ok = await rateLimit(`cpf:${cpf}:cadastro`, 10, 3600);
       if (!ok) {
-        const m = "Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente de novo.";
-        setErroEnvio(m);
-        toast.error(m);
+        const message = "Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente de novo.";
+        setErroEnvio(message);
+        toast.error(message);
         return;
       }
+
       const now = new Date().toISOString();
       const dadosComTatuador: DadosCadastrais = {
         ...dados,
@@ -129,62 +213,132 @@ export default function CadastroPage() {
         sessoes: [{ data: now, assinatura, anamnese, tatuador: tatuadorFinal }],
         status: isMinor ? "pendente_responsavel" : "aguardando",
       };
-      await saveCliente(cliente);
+
+      const clienteSalvo = await saveCliente(cliente);
+      const renderContext = createRenderContext(documentContext, {
+        acceptedAt: now,
+        acceptanceId,
+        source: isMinor ? "cadastro_menor" : "cadastro_padrao",
+        client: {
+          cpf,
+          nomeCompleto: dadosComTatuador.nomeCompleto,
+          email: dadosComTatuador.email,
+          endereco: dadosComTatuador.endereco,
+          telefone: dadosComTatuador.telefone,
+        },
+        artist: { nome: tatuadorFinal },
+      });
+
+      const signatureSnapshot = {
+        present: true,
+        source: "clientes.assinatura",
+        storagePath: clienteSalvo.assinatura || null,
+      };
+
+      const [lgpdSnapshot, contractSnapshot, anamneseSnapshot] = await Promise.all([
+        buildConsentSnapshotPayload("lgpd", renderContext, signatureSnapshot),
+        buildConsentSnapshotPayload("contract", renderContext, signatureSnapshot),
+        buildConsentSnapshotPayload("anamnese", renderContext, signatureSnapshot),
+      ]);
+
       await Promise.allSettled([
         registrarConsentimento({
           cpf,
           tipo: "lgpd",
-          texto: LGPD_REQUIRED_TEXT,
-          versao: CONSENT_TEXT_VERSION,
+          texto: lgpdSnapshot.renderedText,
+          versao: lgpdSnapshot.templateVersion,
           finalidade: "tratamento_dados_procedimento",
           contexto: isMinor ? "cadastro_menor" : "cadastro_padrao",
           consentScope: "required",
-          metadata: { age: idade, minimumAgePolicy: "review_required" },
+          metadata: { acceptanceId, age: idade, minimumAgePolicy: "review_required" },
+          documentType: lgpdSnapshot.documentType,
+          templateVersion: lgpdSnapshot.templateVersion,
+          templateHash: lgpdSnapshot.templateHash,
+          renderedText: lgpdSnapshot.renderedText,
+          configSnapshot: lgpdSnapshot.configSnapshot,
+          clientSnapshot: lgpdSnapshot.clientSnapshot,
+          artistSnapshot: lgpdSnapshot.artistSnapshot,
+          acceptedAt: lgpdSnapshot.acceptedAt,
+          signatureSnapshot: lgpdSnapshot.signatureSnapshot,
+          source: lgpdSnapshot.source,
         }),
         registrarConsentimento({
           cpf,
           tipo: "termo",
-          texto: buildTermoTexto(tatuadorFinal),
-          versao: CONSENT_TEXT_VERSION,
+          texto: contractSnapshot.renderedText,
+          versao: contractSnapshot.templateVersion,
           finalidade: "autorizacao_procedimento",
           contexto: isMinor ? "cadastro_menor" : "cadastro_padrao",
           consentScope: "required",
+          metadata: { acceptanceId },
+          documentType: contractSnapshot.documentType,
+          templateVersion: contractSnapshot.templateVersion,
+          templateHash: contractSnapshot.templateHash,
+          renderedText: contractSnapshot.renderedText,
+          configSnapshot: contractSnapshot.configSnapshot,
+          clientSnapshot: contractSnapshot.clientSnapshot,
+          artistSnapshot: contractSnapshot.artistSnapshot,
+          acceptedAt: contractSnapshot.acceptedAt,
+          signatureSnapshot: contractSnapshot.signatureSnapshot,
+          source: contractSnapshot.source,
         }),
         registrarConsentimento({
           cpf,
           tipo: "anamnese",
-          texto: buildAnamneseAvisos(tatuadorFinal),
-          versao: CONSENT_TEXT_VERSION,
+          texto: anamneseSnapshot.renderedText,
+          versao: anamneseSnapshot.templateVersion,
           finalidade: "triagem_saude",
           contexto: isMinor ? "cadastro_menor" : "cadastro_padrao",
           consentScope: "required",
+          metadata: { acceptanceId },
+          documentType: anamneseSnapshot.documentType,
+          templateVersion: anamneseSnapshot.templateVersion,
+          templateHash: anamneseSnapshot.templateHash,
+          renderedText: anamneseSnapshot.renderedText,
+          configSnapshot: anamneseSnapshot.configSnapshot,
+          clientSnapshot: anamneseSnapshot.clientSnapshot,
+          artistSnapshot: anamneseSnapshot.artistSnapshot,
+          acceptedAt: anamneseSnapshot.acceptedAt,
+          signatureSnapshot: anamneseSnapshot.signatureSnapshot,
+          source: anamneseSnapshot.source,
         }),
         ...consentSummary.map((item) =>
           registrarConsentimento({
             cpf,
             tipo: "imagem",
             texto: IMAGE_CONSENT_TEXT,
-            versao: CONSENT_TEXT_VERSION,
+            versao: documentContext.documents.lgpdTemplateVersion,
             finalidade: item.purpose,
             contexto: isMinor ? "cadastro_menor" : "cadastro_padrao",
             status: item.granted ? "granted" : "denied",
             consentScope: "optional",
-            metadata: { revocable: true },
+            metadata: { acceptanceId, revocable: true },
+            configSnapshot: contractSnapshot.configSnapshot,
+            clientSnapshot: contractSnapshot.clientSnapshot,
+            artistSnapshot: contractSnapshot.artistSnapshot,
+            acceptedAt: now,
+            signatureSnapshot,
+            source: isMinor ? "cadastro_menor" : "cadastro_padrao",
           }),
         ),
       ]);
+
       setFeito(true);
-    } catch (e) {
-      const el = toErrorLike(e);
-      logSecure("warn", "cadastro falhou", { message: el.message, statusCode: el.statusCode });
-      const m = el.message ?? "";
-      const msg =
-        m.includes("storage") || m.includes("upload") || el.statusCode
+    } catch (error) {
+      const errorLike = toErrorLike(error);
+      logSecure("warn", "cadastro falhou", {
+        message: errorLike.message,
+        statusCode: errorLike.statusCode,
+      });
+      const message = errorLike.message ?? "";
+      const friendly = message.includes("Configuracao juridica incompleta")
+        ? message
+        : message.includes("storage") || message.includes("upload") || errorLike.statusCode
           ? "Nao conseguimos enviar sua assinatura. Verifique sua conexao e toque em Reenviar - seus dados permanecem protegidos."
           : "Nao foi possivel enviar o cadastro. Toque em Reenviar para tentar de novo.";
 
-      setErroEnvio(msg);
-      toast.error(msg, {
+      setErroEnvio(friendly);
+      toast.error(friendly, {
         action: { label: "Reenviar", onClick: () => finalizar() },
         duration: 10000,
       });
@@ -233,7 +387,7 @@ export default function CadastroPage() {
                 Responda com sinceridade - isto existe para seguranca do atendimento.
               </p>
               <div className="glass rounded-xl p-5 mb-5 max-h-72 overflow-y-auto text-sm leading-relaxed text-foreground/80 whitespace-pre-line">
-                {buildAnamneseAvisos(tatuadorFinal)}
+                {anamnesePreview}
               </div>
               <AnamneseForm value={anamnese} onChange={setAnamnese} />
             </>
@@ -242,9 +396,9 @@ export default function CadastroPage() {
             <TermoStep
               tatuador={tatuadorFinal}
               tatuadorSelecionado={tatuadorSelecionado}
-              setTatuadorSelecionado={(v) => {
-                setTatuadorSelecionado(v);
-                if (v) setTatuadorErro(null);
+              setTatuadorSelecionado={(value) => {
+                setTatuadorSelecionado(value);
+                if (value) setTatuadorErro(null);
               }}
               tatuadorErro={tatuadorErro}
               enviando={enviando}
@@ -257,13 +411,17 @@ export default function CadastroPage() {
               imageConsent={imageConsent}
               setImageConsent={setImageConsent}
               isMinor={isMinor}
+              termoPreview={termoPreview}
+              lgpdPreview={lgpdPreview}
+              loadingContext={documentContextLoading}
+              legalBlockingMessage={legalBlockingMessage}
             />
           )}
 
           <div className="flex flex-col-reverse sm:flex-row gap-3 mt-8">
             {step > 0 && (
               <button
-                onClick={() => setStep((s) => s - 1)}
+                onClick={() => setStep((value) => value - 1)}
                 className="btn-ghost-gold w-full sm:w-auto px-6 py-3.5 rounded-xl uppercase tracking-[0.2em] text-sm"
               >
                 Voltar
@@ -271,7 +429,7 @@ export default function CadastroPage() {
             )}
             {step < 2 && (
               <button
-                onClick={() => setStep((s) => s + 1)}
+                onClick={() => setStep((value) => value + 1)}
                 disabled={(step === 0 && !dadosOk) || (step === 1 && !anamneseOk)}
                 className="btn-gold w-full sm:flex-1 px-6 py-3.5 rounded-xl uppercase tracking-[0.2em] text-sm"
               >
@@ -287,7 +445,14 @@ export default function CadastroPage() {
                   }
                   finalizar();
                 }}
-                disabled={!assinatura || !aceitoTermo || !aceitoLgpd || enviando}
+                disabled={
+                  !assinatura ||
+                  !aceitoTermo ||
+                  !aceitoLgpd ||
+                  enviando ||
+                  !documentContext.legalReady ||
+                  documentContextLoading
+                }
                 className="btn-gold w-full sm:flex-1 px-6 py-3.5 rounded-xl uppercase tracking-[0.2em] text-sm"
               >
                 {enviando
@@ -317,14 +482,14 @@ function Stepper({ step }: { step: number }) {
   return (
     <div>
       <div className="flex justify-between mb-2">
-        {STEPS.map((s, i) => (
+        {STEPS.map((label, index) => (
           <span
-            key={s}
+            key={label}
             className={`text-[10px] sm:text-xs uppercase tracking-[0.25em] ${
-              i <= step ? "text-gold" : "text-muted-foreground/60"
+              index <= step ? "text-gold" : "text-muted-foreground/60"
             }`}
           >
-            {i + 1}. {s}
+            {index + 1}. {label}
           </span>
         ))}
       </div>
@@ -357,13 +522,13 @@ function DadosForm({
   guardianInfoOk,
 }: {
   dados: DadosCadastrais;
-  setDados: (d: DadosCadastrais) => void;
+  setDados: (next: DadosCadastrais) => void;
   isMinor: boolean;
   idade: number | null;
   guardianInfoOk: boolean;
 }) {
-  const set = <K extends keyof DadosCadastrais>(k: K, v: DadosCadastrais[K]) =>
-    setDados({ ...dados, [k]: v });
+  const set = <K extends keyof DadosCadastrais>(key: K, value: DadosCadastrais[K]) =>
+    setDados({ ...dados, [key]: value });
 
   return (
     <>
@@ -376,14 +541,14 @@ function DadosForm({
             <input
               className="luxury-input w-full rounded-xl px-4 py-3"
               value={dados.nomeCompleto}
-              onChange={(e) => set("nomeCompleto", e.target.value)}
+              onChange={(event) => set("nomeCompleto", event.target.value)}
             />
           </Field>
         </div>
         <Field label="Data de nascimento">
           <BirthDatePicker
             value={dados.dataNascimento}
-            onChange={(v) => set("dataNascimento", v)}
+            onChange={(value) => set("dataNascimento", value)}
             ariaLabel="Data de nascimento"
           />
         </Field>
@@ -391,7 +556,7 @@ function DadosForm({
           <select
             className="luxury-input w-full rounded-xl px-4 py-3"
             value={dados.genero}
-            onChange={(e) => set("genero", e.target.value)}
+            onChange={(event) => set("genero", event.target.value)}
           >
             <option value="">Selecione</option>
             <option>Feminino</option>
@@ -413,7 +578,7 @@ function DadosForm({
             inputMode="numeric"
             className="luxury-input w-full rounded-xl px-4 py-3"
             value={dados.telefone}
-            onChange={(e) => set("telefone", maskPhone(e.target.value))}
+            onChange={(event) => set("telefone", maskPhone(event.target.value))}
             placeholder="(00) 00000-0000"
           />
         </Field>
@@ -422,7 +587,7 @@ function DadosForm({
             type="email"
             className="luxury-input w-full rounded-xl px-4 py-3"
             value={dados.email}
-            onChange={(e) => set("email", e.target.value)}
+            onChange={(event) => set("email", event.target.value)}
           />
         </Field>
         <div className="sm:col-span-2">
@@ -430,7 +595,7 @@ function DadosForm({
             <input
               className="luxury-input w-full rounded-xl px-4 py-3"
               value={dados.endereco}
-              onChange={(e) => set("endereco", e.target.value)}
+              onChange={(event) => set("endereco", event.target.value)}
               placeholder="Rua, numero, bairro, cidade - UF"
             />
           </Field>
@@ -438,18 +603,18 @@ function DadosForm({
         <div className="sm:col-span-2">
           <Field label="Como nos conheceu?">
             <div className="flex flex-wrap gap-2">
-              {["Redes Sociais", "Indicacao", "Outro"].map((opt) => (
+              {["Redes Sociais", "Indicacao", "Outro"].map((option) => (
                 <button
-                  key={opt}
+                  key={option}
                   type="button"
-                  onClick={() => set("comoConheceu", opt)}
+                  onClick={() => set("comoConheceu", option)}
                   className={`px-4 py-2.5 rounded-lg text-sm border transition-all ${
-                    dados.comoConheceu === opt
+                    dados.comoConheceu === option
                       ? "bg-gold/15 border-gold text-gold"
                       : "border-white/10 text-foreground/70 hover:border-gold/40"
                   }`}
                 >
-                  {opt}
+                  {option}
                 </button>
               ))}
             </div>
@@ -475,14 +640,14 @@ function DadosForm({
               <input
                 className="luxury-input w-full rounded-xl px-4 py-3"
                 value={dados.responsavelLegalNome ?? ""}
-                onChange={(e) => set("responsavelLegalNome", e.target.value)}
+                onChange={(event) => set("responsavelLegalNome", event.target.value)}
               />
             </Field>
             <Field label="Contato do responsavel legal">
               <input
                 className="luxury-input w-full rounded-xl px-4 py-3"
                 value={dados.responsavelLegalContato ?? ""}
-                onChange={(e) => set("responsavelLegalContato", e.target.value)}
+                onChange={(event) => set("responsavelLegalContato", event.target.value)}
               />
             </Field>
           </div>
@@ -512,21 +677,29 @@ function TermoStep({
   imageConsent,
   setImageConsent,
   isMinor,
+  termoPreview,
+  lgpdPreview,
+  loadingContext,
+  legalBlockingMessage,
 }: {
   tatuador: string;
   tatuadorSelecionado: string;
-  setTatuadorSelecionado: (v: string) => void;
+  setTatuadorSelecionado: (value: string) => void;
   tatuadorErro: string | null;
   enviando: boolean;
   assinatura: string | null;
-  setAssinatura: (s: string | null) => void;
+  setAssinatura: (value: string | null) => void;
   aceitoTermo: boolean;
-  setAceitoTermo: (b: boolean) => void;
+  setAceitoTermo: (value: boolean) => void;
   aceitoLgpd: boolean;
-  setAceitoLgpd: (b: boolean) => void;
+  setAceitoLgpd: (value: boolean) => void;
   imageConsent: ImageConsentState;
   setImageConsent: (state: ImageConsentState) => void;
   isMinor: boolean;
+  termoPreview: string;
+  lgpdPreview: string;
+  loadingContext: boolean;
+  legalBlockingMessage: string | null;
 }) {
   const labels: Record<keyof ImageConsentState, string> = {
     portfolio: "Portfolio",
@@ -549,20 +722,25 @@ function TermoStep({
         error={tatuadorErro}
       />
 
+      {legalBlockingMessage && !loadingContext && (
+        <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+          {legalBlockingMessage}
+        </div>
+      )}
+
       <div className="glass rounded-xl p-5 max-h-72 overflow-y-auto text-sm leading-relaxed text-foreground/80 whitespace-pre-line">
-        {buildTermoTexto(tatuador)}
+        {termoPreview}
       </div>
 
       <label className="flex items-start gap-3 mt-5 cursor-pointer select-none">
         <input
           type="checkbox"
           checked={aceitoTermo}
-          onChange={(e) => setAceitoTermo(e.target.checked)}
+          onChange={(event) => setAceitoTermo(event.target.checked)}
           className="mt-1 size-4 accent-[oklch(0.82_0.13_85)]"
         />
         <span className="text-sm text-foreground/85">
-          Li, compreendi e aceito o termo necessario ao procedimento. Texto pendente de revisao
-          juridica especializada antes do uso definitivo.
+          Li, compreendi e aceito o termo necessario ao procedimento.
         </span>
       </label>
 
@@ -571,13 +749,13 @@ function TermoStep({
           Protecao de dados - LGPD
         </p>
         <div className="glass rounded-xl p-5 max-h-60 overflow-y-auto text-sm leading-relaxed text-foreground/80 whitespace-pre-line">
-          {LGPD_REQUIRED_TEXT}
+          {lgpdPreview}
         </div>
         <label className="flex items-start gap-3 mt-4 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={aceitoLgpd}
-            onChange={(e) => setAceitoLgpd(e.target.checked)}
+            onChange={(event) => setAceitoLgpd(event.target.checked)}
             className="mt-1 size-4 accent-[oklch(0.82_0.13_85)]"
           />
           <span className="text-sm text-foreground/85">
@@ -601,10 +779,10 @@ function TermoStep({
             <input
               type="checkbox"
               checked={imageConsent[purpose]}
-              onChange={(e) =>
+              onChange={(event) =>
                 setImageConsent({
                   ...imageConsent,
-                  [purpose]: e.target.checked,
+                  [purpose]: event.target.checked,
                 })
               }
               className="mt-1 size-4 accent-[oklch(0.82_0.13_85)]"
