@@ -124,8 +124,16 @@ export function useTattooArtists(): AsyncState<TattooArtist[]> & { refetch: () =
   const load = useCallback(async () => {
     setState((current) => ({ ...current, isLoading: true, error: null }));
     try {
-      const [rows, metrics] = await Promise.all([fetchTattooArtistRows(), fetchArtistMetrics()]);
-      const data = mapArtistRows(rows, metrics);
+      const [rowsResult, metricsResult] = await Promise.allSettled([
+        fetchTattooArtistRows(),
+        fetchArtistMetrics(),
+      ]);
+      if (rowsResult.status === "rejected") throw rowsResult.reason;
+      const metrics =
+        metricsResult.status === "fulfilled"
+          ? metricsResult.value
+          : { clientes: [], checkins: [] };
+      const data = mapArtistRows(rowsResult.value, metrics);
       setState({ data, isLoading: false, isEmpty: data.length === 0, error: null });
     } catch (error) {
       setState({
