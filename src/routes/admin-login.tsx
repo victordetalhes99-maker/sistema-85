@@ -47,14 +47,37 @@ export default function AdminLoginPage() {
     return <Navigate to={next} replace />;
   }
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
 
     setError(null);
-    const cleanEmail = email.trim().toLowerCase();
 
-    if (!cleanEmail || !password) {
+    // Rede de seguranca: em alguns navegadores/gerenciadores de senha, o
+    // autofill escreve no DOM sem disparar o evento "input" que o React
+    // escuta, deixando o estado controlado (useState) vazio mesmo com o
+    // campo visualmente preenchido. Por isso lemos o valor tambem via
+    // FormData diretamente do <form> no momento do submit e usamos o que
+    // nao estiver vazio.
+    const formData = new FormData(e.currentTarget);
+    const domEmail = (formData.get("email") as string) ?? "";
+    const domPassword = (formData.get("password") as string) ?? "";
+
+    const resolvedEmail = email || domEmail;
+    const resolvedPassword = password || domPassword;
+    const cleanEmail = resolvedEmail.trim().toLowerCase();
+
+    // TEMPORARIO — remover apos confirmar a causa em producao.
+    // Nunca registra a senha, so metadados sobre ela.
+    console.log("[admin-login debug]", {
+      hasEmail: Boolean(cleanEmail),
+      hasPassword: Boolean(resolvedPassword),
+      passwordLength: resolvedPassword?.length ?? 0,
+      emailCameFromDomFallback: !email && Boolean(domEmail),
+      passwordCameFromDomFallback: !password && Boolean(domPassword),
+    });
+
+    if (!cleanEmail || !resolvedPassword) {
       setError("Informe e-mail e senha.");
       return;
     }
@@ -80,7 +103,7 @@ export default function AdminLoginPage() {
 
       const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
-        password,
+        password: resolvedPassword,
       });
 
       const { error: recordError } = await supabase.rpc("record_login_attempt", {
@@ -157,6 +180,7 @@ export default function AdminLoginPage() {
             <Label htmlFor="email">E-mail</Label>
             <Input
               id="email"
+              name="email"
               type="email"
               autoComplete="email"
               autoFocus
@@ -181,6 +205,7 @@ export default function AdminLoginPage() {
             <div className="relative">
               <Input
                 id="password"
+                name="password"
                 type={showPw ? "text" : "password"}
                 autoComplete="current-password"
                 value={password}
