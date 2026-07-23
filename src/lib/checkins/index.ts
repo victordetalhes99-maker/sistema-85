@@ -20,12 +20,7 @@ import { onlyDigits } from "@/lib/clientes";
 // ----------------------------- Tipos ----------------------------------------
 
 export type CheckInStatus =
-  | "waiting"
-  | "called"
-  | "in_service"
-  | "completed"
-  | "cancelled"
-  | "no_show";
+  "waiting" | "called" | "in_service" | "completed" | "cancelled" | "no_show";
 
 export type CheckInEventKind =
   | "created"
