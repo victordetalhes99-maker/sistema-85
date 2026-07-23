@@ -84,19 +84,10 @@ export interface Activity {
 }
 
 export type IntegrationKind =
-  | "database"
-  | "google_drive"
-  | "storage"
-  | "email"
-  | "calendar"
-  | "whatsapp";
+  "database" | "google_drive" | "storage" | "email" | "calendar" | "whatsapp";
 
 export type IntegrationStatus =
-  | "nao_configurado"
-  | "pendente"
-  | "conectado"
-  | "erro"
-  | "desativado";
+  "nao_configurado" | "pendente" | "conectado" | "erro" | "desativado";
 
 export interface IntegrationInfo {
   kind: IntegrationKind;

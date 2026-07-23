@@ -4,11 +4,7 @@
 
 export type DestinationKind = "r2" | "google_drive" | "local";
 export type DestinationStatus =
-  | "nao_configurado"
-  | "configuracao_incompleta"
-  | "conectado"
-  | "erro"
-  | "desativado";
+  "nao_configurado" | "configuracao_incompleta" | "conectado" | "erro" | "desativado";
 
 export interface BackupDestination {
   id: string;
@@ -23,13 +19,7 @@ export interface BackupDestination {
 }
 
 export type BackupJobStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "partial"
-  | "failed"
-  | "cancelado"
-  | "validando";
+  "queued" | "running" | "completed" | "partial" | "failed" | "cancelado" | "validando";
 
 export type BackupJobType = "completo" | "banco" | "documentos" | "incremental" | "manual";
 
